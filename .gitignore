@@ -27,3 +27,6 @@ Thumbs.db
 *.profraw
 *.gcda
 *.gcno
+
+# Development specs
+spec/

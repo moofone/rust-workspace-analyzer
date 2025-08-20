@@ -46,7 +46,7 @@ impl MemgraphClient {
             let _ = self.graph.execute(Query::new(query.to_string())).await;
         }
         
-        println!("✅ Memgraph schema initialized for workspace: {}", self.workspace_name);
+        eprintln!("✅ Memgraph schema initialized for workspace: {}", self.workspace_name);
         Ok(())
     }
     
@@ -56,7 +56,7 @@ impl MemgraphClient {
         result.next().await?;
         let duration = start.elapsed();
         
-        println!("🏥 Memgraph health check: {}ms", duration.as_millis());
+        eprintln!("🏥 Memgraph health check: {}ms", duration.as_millis());
         Ok(duration.as_millis() < 50) // Should be sub-50ms for good performance
     }
 }

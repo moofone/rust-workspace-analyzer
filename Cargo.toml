@@ -1,7 +1,18 @@
 [package]
 name = "workspace-analyzer"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+description = "Rust workspace analyzer with MCP protocol support for Claude Code"
+license = "MIT"
+authors = ["Greg Tiller"]
+repository = "https://github.com/anthropics/rust-workspace-analyzer"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
 
 
 [[bin]]
@@ -84,4 +95,3 @@ uuid = { version = "1.18", features = ["v4"] }
 dashmap = "5.5"
 rayon = "1.11"
 clap = { version = "4.5", features = ["derive"] }
-

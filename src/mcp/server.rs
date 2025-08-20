@@ -114,7 +114,11 @@ impl WorkspaceMcpServer {
                         "description": "Get comprehensive context about the current workspace",
                         "inputSchema": {
                             "type": "object",
-                            "properties": {}
+                            "properties": {
+                                "limit_functions": {"type": "number", "description": "Limit number of functions shown (default: 20)"},
+                                "limit_types": {"type": "number", "description": "Limit number of types shown (default: 10)"},
+                                "summary_only": {"type": "boolean", "description": "Show only summary statistics (default: false)"}
+                            }
                         }
                     },
                     {
@@ -177,28 +181,77 @@ impl WorkspaceMcpServer {
     async fn handle_workspace_context(&self, request: McpRequest) -> McpResponse {
         let snapshot = self.current_snapshot.read().await;
         
+        // Parse parameters
+        let limit_functions = request.params.as_ref()
+            .and_then(|p| p.get("limit_functions"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20) as usize;
+        
+        let limit_types = request.params.as_ref()
+            .and_then(|p| p.get("limit_types"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10) as usize;
+        
+        let summary_only = request.params.as_ref()
+            .and_then(|p| p.get("summary_only"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        
         match snapshot.as_ref() {
             Some(snapshot) => {
-                let context = json!({
-                    "workspace_root": self.workspace_root.display().to_string(),
-                    "analysis_timestamp": snapshot.timestamp.duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default().as_secs(),
-                    "summary": {
-                        "total_functions": snapshot.functions.len(),
-                        "total_types": snapshot.types.len(),
-                        "total_dependencies": snapshot.dependencies.len(),
-                        "modules": self.get_module_summary(&snapshot)
-                    },
-                    "top_functions": self.get_representative_functions(&snapshot),
-                    "top_types": self.get_representative_types(&snapshot)
-                });
+                let module_summary = self.get_module_summary(&snapshot);
+                let crate_count = self.get_crate_count(&snapshot);
+                
+                // Build more concise summary
+                let mut summary_text = format!(
+                    "# Workspace Analysis\n\n\
+                    ## 📊 Overview\n\
+                    - **Workspace**: {}\n\
+                    - **Total Crates**: {}\n\
+                    - **Total Functions**: {}\n\
+                    - **Total Types**: {}\n\
+                    - **Function References**: {}\n\
+                    - **Cross-crate Calls**: {}\n\n",
+                    self.workspace_root.display(),
+                    crate_count,
+                    snapshot.functions.len(),
+                    snapshot.types.len(), 
+                    snapshot.function_references.len(),
+                    snapshot.function_references.iter().filter(|f| f.cross_crate).count()
+                );
+                
+                if !summary_only {
+                    // Add limited function and type examples
+                    let functions = self.get_representative_functions_limited(&snapshot, limit_functions);
+                    let types = self.get_representative_types_limited(&snapshot, limit_types);
+                    
+                    summary_text.push_str(&format!(
+                        "## 🔧 Sample Functions (showing {} of {}):\n{}\n\n\
+                        ## 📦 Sample Types (showing {} of {}):\n{}\n\n",
+                        functions.len().min(limit_functions), snapshot.functions.len(),
+                        functions.iter().take(limit_functions)
+                            .map(|f| format!("- `{}` in {}", 
+                                f["qualified_name"].as_str().unwrap_or("unknown"),
+                                f["crate"].as_str().unwrap_or("unknown")))
+                            .collect::<Vec<_>>().join("\n"),
+                        types.len().min(limit_types), snapshot.types.len(),
+                        types.iter().take(limit_types)
+                            .map(|t| format!("- `{}` ({}) in {}", 
+                                t["qualified_name"].as_str().unwrap_or("unknown"),
+                                t["type_kind"].as_str().unwrap_or("unknown"),
+                                t["crate"].as_str().unwrap_or("unknown")))
+                            .collect::<Vec<_>>().join("\n")
+                    ));
+                }
+                
+                summary_text.push_str("Use other tools like `analyze_test_coverage` or `check_architecture_violations` for detailed analysis.");
                 
                 McpResponse {
                     id: request.id,
                     result: Some(json!({
                         "content": [{
                             "type": "text",
-                            "text": format!("# Workspace Analysis\n\n{}", serde_json::to_string_pretty(&context).unwrap())
+                            "text": summary_text
                         }]
                     })),
                     error: None,
@@ -279,9 +332,17 @@ impl WorkspaceMcpServer {
     async fn handle_check_architecture_violations(&self, request: McpRequest) -> McpResponse {
         let snapshot = self.current_snapshot.read().await;
         
+        // Extract rules filter from request params
+        let rules_filter = request.params
+            .as_ref()
+            .and_then(|p| p.get("rules"))
+            .and_then(|r| r.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        
         match snapshot.as_ref() {
             Some(snapshot) => {
-                let violations = self.check_architectural_violations(snapshot);
+                let violations = self.check_architectural_violations_with_filter(snapshot, &rules_filter);
                 
                 McpResponse {
                     id: request.id,
@@ -570,6 +631,100 @@ impl WorkspaceMcpServer {
         modules
     }
     
+    fn get_crate_count(&self, snapshot: &WorkspaceSnapshot) -> usize {
+        use std::collections::HashSet;
+        let mut crates = HashSet::new();
+        
+        for func in &snapshot.functions {
+            if let Some(crate_name) = self.extract_crate_name(&func.file_path) {
+                crates.insert(crate_name);
+            }
+        }
+        
+        crates.len()
+    }
+    
+    fn get_representative_functions_limited(&self, snapshot: &WorkspaceSnapshot, limit: usize) -> Vec<Value> {
+        use std::collections::HashMap;
+        let mut crate_functions: HashMap<String, Vec<&crate::analyzer::RustFunction>> = HashMap::new();
+        
+        // Group functions by crate
+        for func in &snapshot.functions {
+            if let Some(crate_name) = self.extract_crate_name(&func.file_path) {
+                crate_functions.entry(crate_name).or_insert_with(Vec::new).push(func);
+            }
+        }
+        
+        let mut functions = Vec::new();
+        let per_crate_limit = std::cmp::max(1, limit / crate_functions.len().max(1));
+        
+        // Get limited functions per crate
+        for (crate_name, crate_funcs) in crate_functions.iter() {
+            let crate_limit = std::cmp::min(per_crate_limit, crate_funcs.len());
+            for func in crate_funcs.iter().take(crate_limit) {
+                functions.push(json!({
+                    "name": func.name,
+                    "qualified_name": func.qualified_name,
+                    "module": func.module,
+                    "visibility": func.visibility,
+                    "file": func.file_path.display().to_string(),
+                    "line_start": func.line_start,
+                    "crate": crate_name
+                }));
+                
+                if functions.len() >= limit {
+                    break;
+                }
+            }
+            if functions.len() >= limit {
+                break;
+            }
+        }
+        
+        functions
+    }
+    
+    fn get_representative_types_limited(&self, snapshot: &WorkspaceSnapshot, limit: usize) -> Vec<Value> {
+        use std::collections::HashMap;
+        let mut crate_types: HashMap<String, Vec<&crate::analyzer::RustType>> = HashMap::new();
+        
+        // Group types by crate
+        for typ in &snapshot.types {
+            if let Some(crate_name) = self.extract_crate_name(&typ.file_path) {
+                crate_types.entry(crate_name).or_insert_with(Vec::new).push(typ);
+            }
+        }
+        
+        let mut types = Vec::new();
+        let per_crate_limit = std::cmp::max(1, limit / crate_types.len().max(1));
+        
+        // Get limited types per crate
+        for (crate_name, crate_type_list) in crate_types.iter() {
+            let crate_limit = std::cmp::min(per_crate_limit, crate_type_list.len());
+            for typ in crate_type_list.iter().take(crate_limit) {
+                types.push(json!({
+                    "name": typ.name,
+                    "qualified_name": typ.qualified_name,
+                    "type_kind": typ.type_kind,
+                    "module": typ.module,
+                    "visibility": typ.visibility,
+                    "file": typ.file_path.display().to_string(),
+                    "line_start": typ.line_start,
+                    "crate": crate_name
+                }));
+                
+                if types.len() >= limit {
+                    break;
+                }
+            }
+            if types.len() >= limit {
+                break;
+            }
+        }
+        
+        types
+    }
+    
     fn get_representative_functions(&self, snapshot: &WorkspaceSnapshot) -> Vec<Value> {
         use std::collections::HashMap;
         let mut crate_functions: HashMap<String, Vec<&crate::analyzer::RustFunction>> = HashMap::new();
@@ -695,7 +850,7 @@ impl WorkspaceMcpServer {
         }
         
         if !dependents.is_empty() {
-            impact_report.push(format!("\\n## Potential Impact ({} dependents):", dependents.len()));
+            impact_report.push(format!("\n## Potential Impact ({} dependents):", dependents.len()));
             for dep in dependents.iter().take(10) {
                 impact_report.push(format!("- {} calls from {} (line {})", 
                     dep.dependency_type, dep.file_path.display(), dep.line));
@@ -704,10 +859,43 @@ impl WorkspaceMcpServer {
                 impact_report.push(format!("... and {} more", dependents.len() - 10));
             }
         } else {
-            impact_report.push("\\n## Impact: ✅ No direct dependents found".to_string());
+            impact_report.push("\n## Impact: ✅ No direct dependents found".to_string());
         }
         
-        impact_report.join("\\n")
+        impact_report.join("\n")
+    }
+    
+    fn check_architectural_violations_with_filter(&self, snapshot: &WorkspaceSnapshot, rules_filter: &[&str]) -> String {
+        if rules_filter.is_empty() {
+            // No filter - run full analysis
+            return self.check_architectural_violations(snapshot);
+        }
+        
+        let mut violations = Vec::new();
+        violations.push("## 🏗️ Layer Dependency Analysis".to_string());
+        
+        // Apply rule filters
+        if rules_filter.contains(&"layer_violations") {
+            let layer_violations = self.check_layer_violations_only(snapshot);
+            violations.push(layer_violations);
+        }
+        
+        if rules_filter.contains(&"circular_deps") {
+            let circular_deps = self.find_circular_dependencies(snapshot);
+            violations.push(format!("\n## 🔄 Circular Dependencies\n{}", circular_deps));
+        }
+        
+        if rules_filter.contains(&"layer_jumps") {
+            let layer_jumps = self.check_layer_jumps_only(snapshot);
+            violations.push(layer_jumps);
+        }
+        
+        if rules_filter.contains(&"prelude_usage") {
+            let prelude_suggestions = self.check_prelude_usage_only(snapshot);
+            violations.push(prelude_suggestions);
+        }
+        
+        violations.join("\n")
     }
     
     fn check_architectural_violations(&self, snapshot: &WorkspaceSnapshot) -> String {
@@ -730,6 +918,9 @@ impl WorkspaceMcpServer {
             .map(|(k, v)| (k.to_string(), v))
             .collect();
         
+        // Build lowest-layer first reference tracking
+        let lowest_layer_references = self.build_lowest_layer_reference_map(snapshot, &layer_map);
+        
         // Check for layer violations
         violations.push("## 🏗️ Layer Dependency Analysis".to_string());
         
@@ -737,32 +928,62 @@ impl WorkspaceMcpServer {
         let mut cross_layer_jumps = Vec::new();
         let mut missing_prelude_usage = Vec::new();
         
+        // Debug: count dependencies by type
+        let mut dep_count = 0;
+        let mut cross_crate_count = 0;
+        let mut layer_pair_count = 0;
+        let mut sample_crates = std::collections::HashSet::new();
+        
+        // Use function references for more accurate cross-crate analysis
+        for func_ref in &snapshot.function_references {
+            if func_ref.cross_crate && !func_ref.from_test {
+                dep_count += 1;
+                let from_crate = self.extract_crate_from_dependency_path(&func_ref.calling_function);
+                let to_crate = self.extract_crate_from_dependency_path(&func_ref.target_function);
+                
+                // Collect sample crate names for debugging
+                if sample_crates.len() < 20 {
+                    sample_crates.insert(from_crate.clone());
+                    sample_crates.insert(to_crate.clone());
+                }
+                
+                if from_crate != to_crate {
+                    cross_crate_count += 1;
+                }
+                
+                if let (Some(from_layer), Some(to_layer)) = (layer_map.get(&from_crate), layer_map.get(&to_crate)) {
+                layer_pair_count += 1;
+                // Check for upward dependencies (violation) - lower layers should not call higher layers
+                if from_layer < to_layer {
+                    layer_violations.push(format!(
+                        "⚠️  **Upward Dependency**: `{}` (layer {}) → `{}` (layer {}) - {}() calls {}() in {}:{}",
+                        from_crate, from_layer, to_crate, to_layer, 
+                        func_ref.calling_function.split("::").last().unwrap_or("unknown"),
+                        func_ref.target_function.split("::").last().unwrap_or("unknown"),
+                        func_ref.file_path.display(), func_ref.line
+                    ));
+                }
+                
+                // Check for layer jumps > 1 
+                let layer_jump = (to_layer - from_layer).abs();
+                if layer_jump > 1 {
+                    cross_layer_jumps.push(format!(
+                        "🔀 **Layer Jump**: `{}` → `{}` (jumps {} layers) - {}() calls {}() in {}:{}",
+                        from_crate, to_crate, layer_jump,
+                        func_ref.calling_function.split("::").last().unwrap_or("unknown"),
+                        func_ref.target_function.split("::").last().unwrap_or("unknown"),
+                        func_ref.file_path.display(), func_ref.line
+                    ));
+                }
+                }
+            }
+        }
+        
+        // Check for missing prelude usage in use statements
         for dep in &snapshot.dependencies {
             let from_crate = self.extract_crate_from_dependency_path(&dep.from_module);
             let to_crate = self.extract_crate_from_dependency_path(&dep.to_module);
             
-            if let (Some(from_layer), Some(to_layer)) = (layer_map.get(&from_crate), layer_map.get(&to_crate)) {
-                // Check for upward dependencies (violation)
-                if from_layer > to_layer {
-                    layer_violations.push(format!(
-                        "⚠️  **Upward Dependency**: `{}` (layer {}) → `{}` (layer {}) in {}:{}",
-                        from_crate, from_layer, to_crate, to_layer, 
-                        dep.file_path.display(), dep.line
-                    ));
-                }
-                
-                // Check for layer jumps > 1 without prelude
-                let layer_jump = (to_layer - from_layer).abs();
-                if layer_jump > 1 && !dep.to_module.contains("prelude") {
-                    cross_layer_jumps.push(format!(
-                        "🔀 **Layer Jump**: `{}` → `{}` (jumps {} layers) without prelude in {}:{}",
-                        from_crate, to_crate, layer_jump,
-                        dep.file_path.display(), dep.line  
-                    ));
-                }
-            }
-            
-            // Check for missing prelude usage in cross-crate dependencies
             if from_crate != to_crate && 
                dep.dependency_type == "use" && 
                !dep.to_module.contains("prelude") && 
@@ -778,9 +999,16 @@ impl WorkspaceMcpServer {
             }
         }
         
+        // Analysis summary
+        violations.push(format!("\n### 📊 Analysis Summary:"));
+        violations.push(format!("- **Cross-crate function calls analyzed**: {}", dep_count));
+        violations.push(format!("- **Layer violations found**: {}", layer_violations.len()));
+        violations.push(format!("- **Layer jumps found**: {}", cross_layer_jumps.len()));
+        violations.push(format!("- **Deep import suggestions**: {}", missing_prelude_usage.len()));
+        
         // Report violations
         if layer_violations.is_empty() && cross_layer_jumps.is_empty() && missing_prelude_usage.is_empty() {
-            violations.push("✅ **No architecture violations detected**".to_string());
+            violations.push("\n✅ **No architecture violations detected**".to_string());
         } else {
             if !layer_violations.is_empty() {
                 violations.push(format!("### 🚨 Layer Violations ({}):", layer_violations.len()));
@@ -788,36 +1016,87 @@ impl WorkspaceMcpServer {
             }
             
             if !cross_layer_jumps.is_empty() {
-                violations.push(format!("\\n### 🔀 Cross-Layer Jumps ({}):", cross_layer_jumps.len()));
+                violations.push(format!("\n### 🔀 Cross-Layer Jumps ({}):", cross_layer_jumps.len()));
                 violations.extend(cross_layer_jumps.into_iter().take(10));
             }
             
             if !missing_prelude_usage.is_empty() {
-                violations.push(format!("\\n### 📦 Consider Prelude Usage ({}):", missing_prelude_usage.len()));
+                violations.push(format!("\n### 📦 Consider Prelude Usage ({}):", missing_prelude_usage.len()));
                 violations.extend(missing_prelude_usage.into_iter().take(5));
             }
         }
         
         // Add circular dependency check
         let circular_deps = self.find_circular_dependencies(snapshot);
-        violations.push(format!("\\n## 🔄 Circular Dependencies\\n{}", circular_deps));
+        violations.push(format!("\n## 🔄 Circular Dependencies\n{}", circular_deps));
         
-        violations.join("\\n")
+        violations.join("\n")
     }
     
     fn extract_crate_from_dependency_path(&self, dep_path: &str) -> String {
-        // Extract crate name from dependency path
-        if dep_path.contains("trading-") {
-            if let Some(start) = dep_path.find("trading-") {
-                let remaining = &dep_path[start..];
-                if let Some(end) = remaining.find("::").or_else(|| Some(remaining.len())) {
-                    return remaining[..end].to_string();
+        // Handle empty or invalid paths
+        if dep_path.is_empty() {
+            return "unknown".to_string();
+        }
+        
+        // Get the first component (potential crate name)
+        let first_component = dep_path.split("::").next().unwrap_or("unknown");
+        
+        // Normalize crate name (underscore to hyphen for consistency)
+        let normalized_component = first_component.replace("_", "-");
+        
+        // Known trading crates - comprehensive list
+        let trading_crates = [
+            "trading-core", "trading-config", "trading-instruments", "trading-ta",
+            "trading-exchange-core", "trading-exchanges", "trading-data-services", 
+            "trading-strategy", "trading-backtest", "trading-runtime",
+            // Add common external crates that might appear
+            "serde", "tokio", "anyhow", "thiserror", "log", "tracing", "uuid",
+            "chrono", "reqwest", "sqlx", "diesel", "sea-orm"
+        ];
+        
+        // Check against known crates first (both normalized and original forms)
+        for crate_name in &trading_crates {
+            if normalized_component == *crate_name || 
+               first_component == *crate_name ||
+               first_component == crate_name.replace("-", "_") {
+                // Always return the hyphenated form for trading crates
+                if crate_name.starts_with("trading-") {
+                    return crate_name.to_string();
+                } else {
+                    // For external crates, return the original form
+                    return first_component.to_string();
                 }
             }
         }
         
-        // Fallback: use the first component
-        dep_path.split("::").next().unwrap_or("unknown").to_string()
+        // Advanced pattern matching for complex paths
+        if dep_path.contains("::") {
+            // Handle paths like "crate::module::function" vs "::external::path"
+            if dep_path.starts_with("::") {
+                // Global path, extract second component
+                let components: Vec<&str> = dep_path.split("::").collect();
+                if components.len() > 1 && !components[1].is_empty() {
+                    return self.normalize_crate_name(components[1]);
+                }
+            } else {
+                // Regular qualified path - first component is the crate
+                return self.normalize_crate_name(first_component);
+            }
+        }
+        
+        // Fallback: return normalized component
+        self.normalize_crate_name(first_component)
+    }
+    
+    /// Normalize crate names for consistent comparison
+    fn normalize_crate_name(&self, crate_name: &str) -> String {
+        // Convert underscores to hyphens for trading crates
+        if crate_name.starts_with("trading_") {
+            crate_name.replace("_", "-")
+        } else {
+            crate_name.to_string()
+        }
     }
     
     fn find_circular_dependencies(&self, snapshot: &WorkspaceSnapshot) -> String {
@@ -851,7 +1130,147 @@ impl WorkspaceMcpServer {
         if issues.is_empty() {
             "✅ No circular dependencies detected".to_string()
         } else {
-            format!("## Issues Found ({}):  \\n{}  ", issues.len(), issues.join("\\n"))
+            format!("## Issues Found ({}):\n{}", issues.len(), issues.join("\n"))
         }
     }
+    
+    fn build_lowest_layer_reference_map(&self, snapshot: &WorkspaceSnapshot, layer_map: &HashMap<String, i32>) -> HashMap<String, LowestLayerReference> {
+        let mut lowest_refs: HashMap<String, LowestLayerReference> = HashMap::new();
+        
+        // Process all dependencies to find the lowest layer that references each module
+        for dep in &snapshot.dependencies {
+            let from_crate = self.extract_crate_from_dependency_path(&dep.from_module);
+            let from_layer = layer_map.get(&from_crate).copied().unwrap_or(999); // Unknown = high layer
+            
+            // Track the lowest layer reference for each target module
+            let current_lowest = lowest_refs.get(&dep.to_module).map(|lr| lr.layer).unwrap_or(999);
+            
+            if from_layer < current_lowest {
+                lowest_refs.insert(dep.to_module.clone(), LowestLayerReference {
+                    layer: from_layer,
+                    crate_name: from_crate,
+                    file_path: dep.file_path.clone(),
+                    line: dep.line,
+                    dependency_type: dep.dependency_type.clone(),
+                });
+            }
+        }
+        
+        lowest_refs
+    }
+    
+    fn check_layer_violations_only(&self, snapshot: &WorkspaceSnapshot) -> String {
+        let layer_hierarchy = vec![
+            ("trading-core", 0), ("trading-instruments", 1), ("trading-ta", 1),
+            ("trading-exchange-core", 2), ("trading-exchanges", 3), ("trading-data-services", 3),
+            ("trading-strategy", 4), ("trading-backtest", 4), ("trading-runtime", 5),
+        ];
+        let layer_map: HashMap<String, i32> = layer_hierarchy.into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        
+        let mut layer_violations = Vec::new();
+        
+        for func_ref in &snapshot.function_references {
+            if func_ref.cross_crate && !func_ref.from_test {
+                let from_crate = self.extract_crate_from_dependency_path(&func_ref.calling_function);
+                let to_crate = self.extract_crate_from_dependency_path(&func_ref.target_function);
+                
+                if let (Some(from_layer), Some(to_layer)) = (layer_map.get(&from_crate), layer_map.get(&to_crate)) {
+                    if from_layer < to_layer {
+                        layer_violations.push(format!(
+                            "⚠️  **Upward Dependency**: `{}` (layer {}) → `{}` (layer {}) - {}() calls {}() in {}:{}",
+                            from_crate, from_layer, to_crate, to_layer, 
+                            func_ref.calling_function.split("::").last().unwrap_or("unknown"),
+                            func_ref.target_function.split("::").last().unwrap_or("unknown"),
+                            func_ref.file_path.display(), func_ref.line
+                        ));
+                    }
+                }
+            }
+        }
+        
+        if layer_violations.is_empty() {
+            "\n### ✅ Layer Violations: None found".to_string()
+        } else {
+            format!("\n### 🚨 Layer Violations ({}):\n{}", layer_violations.len(), layer_violations.join("\n"))
+        }
+    }
+    
+    fn check_layer_jumps_only(&self, snapshot: &WorkspaceSnapshot) -> String {
+        let layer_hierarchy = vec![
+            ("trading-core", 0), ("trading-instruments", 1), ("trading-ta", 1),
+            ("trading-exchange-core", 2), ("trading-exchanges", 3), ("trading-data-services", 3),
+            ("trading-strategy", 4), ("trading-backtest", 4), ("trading-runtime", 5),
+        ];
+        let layer_map: HashMap<String, i32> = layer_hierarchy.into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        
+        let mut cross_layer_jumps = Vec::new();
+        
+        for func_ref in &snapshot.function_references {
+            if func_ref.cross_crate && !func_ref.from_test {
+                let from_crate = self.extract_crate_from_dependency_path(&func_ref.calling_function);
+                let to_crate = self.extract_crate_from_dependency_path(&func_ref.target_function);
+                
+                if let (Some(from_layer), Some(to_layer)) = (layer_map.get(&from_crate), layer_map.get(&to_crate)) {
+                    let layer_jump = (to_layer - from_layer).abs();
+                    if layer_jump > 1 {
+                        cross_layer_jumps.push(format!(
+                            "🔀 **Layer Jump**: `{}` → `{}` (jumps {} layers) - {}() calls {}() in {}:{}",
+                            from_crate, to_crate, layer_jump,
+                            func_ref.calling_function.split("::").last().unwrap_or("unknown"),
+                            func_ref.target_function.split("::").last().unwrap_or("unknown"),
+                            func_ref.file_path.display(), func_ref.line
+                        ));
+                    }
+                }
+            }
+        }
+        
+        if cross_layer_jumps.is_empty() {
+            "\n### ✅ Layer Jumps: None found".to_string()
+        } else {
+            format!("\n### 🔀 Cross-Layer Jumps ({}):\n{}", cross_layer_jumps.len(), cross_layer_jumps.into_iter().take(10).collect::<Vec<_>>().join("\n"))
+        }
+    }
+    
+    fn check_prelude_usage_only(&self, snapshot: &WorkspaceSnapshot) -> String {
+        let mut missing_prelude_usage = Vec::new();
+        
+        for dep in &snapshot.dependencies {
+            let from_crate = self.extract_crate_from_dependency_path(&dep.from_module);
+            let to_crate = self.extract_crate_from_dependency_path(&dep.to_module);
+            
+            if from_crate != to_crate && 
+               dep.dependency_type == "use" && 
+               !dep.to_module.contains("prelude") && 
+               dep.to_module.contains("::") {
+                let depth = dep.to_module.matches("::").count();
+                if depth > 2 {
+                    missing_prelude_usage.push(format!(
+                        "📦 **Deep Import**: `{}` (depth {}) - consider using prelude in {}:{}",
+                        dep.to_module, depth,
+                        dep.file_path.display(), dep.line
+                    ));
+                }
+            }
+        }
+        
+        if missing_prelude_usage.is_empty() {
+            "\n### ✅ Prelude Usage: All imports are reasonably shallow".to_string()
+        } else {
+            format!("\n### 📦 Consider Prelude Usage ({}):\n{}", missing_prelude_usage.len(), missing_prelude_usage.into_iter().take(5).collect::<Vec<_>>().join("\n"))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LowestLayerReference {
+    layer: i32,
+    crate_name: String,
+    file_path: std::path::PathBuf,
+    line: usize,
+    dependency_type: String,
 }

@@ -6,8 +6,10 @@ use std::path::Path;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "mcp-server-stdio")]
-#[command(about = "MCP Server with JSON-RPC over stdio for Claude Code")]
+#[command(name = "rust-workspace-analyzer")]
+#[command(version = "0.1.0")]
+#[command(about = "Rust Workspace Analyzer - MCP Server for Claude Code")]
+#[command(long_about = "Analyzes Rust workspaces and provides architecture insights via MCP protocol")]
 struct Args {
     /// Path to the workspace to analyze
     #[arg(short, long, default_value = ".")]
