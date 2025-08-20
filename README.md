@@ -1,6 +1,6 @@
-# Rust Workspace Analyzer for Claude Code
+# Rust Workspace Analyzer for Trading Backend PoC
 
-A powerful MCP (Model Context Protocol) server that provides deep architectural analysis and insights for Rust workspaces, designed for seamless integration with Claude Code.
+A specialized MCP (Model Context Protocol) server that provides deep architectural analysis and insights for the trading-backend-poc Rust workspace, designed for seamless integration with Claude Code.
 
 ## 🚀 Features
 
@@ -40,6 +40,8 @@ cargo build --release --bin mcp-server-stdio
 # Run installation script
 ./install.sh
 ```
+
+**Note**: This analyzer is specifically designed for the trading-backend-poc project architecture and layer structure.
 
 ### Manual Installation
 
@@ -82,7 +84,7 @@ cargo build --release --bin mcp-server-stdio
 
 ### With Claude Code
 
-Once installed, restart Claude Code and try these commands in any Rust workspace:
+Once installed, restart Claude Code and try these commands in the trading-backend-poc workspace:
 
 #### Architecture Analysis
 ```
@@ -360,6 +362,8 @@ cd rust-workspace-analyzer
 cargo build
 cargo test
 ```
+
+**Important**: This tool is tailored for the trading-backend-poc project's specific architecture patterns and may not work correctly with other Rust projects.
 
 ## 📄 License
 
