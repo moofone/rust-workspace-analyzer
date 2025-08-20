@@ -1,0 +1,87 @@
+[package]
+name = "workspace-analyzer"
+version = "0.1.0"
+edition = "2021"
+
+
+[[bin]]
+name = "test-setup"
+path = "src/bin/test_setup.rs"
+
+[[bin]]
+name = "mcp-server"
+path = "src/bin/mcp_server.rs"
+
+[[bin]]
+name = "check-memgraph"
+path = "src/bin/check_memgraph.rs"
+
+[[bin]]
+name = "test-architecture"
+path = "src/bin/test_architecture.rs"
+
+[[bin]]
+name = "test-diversity"
+path = "src/bin/test_diversity.rs"
+
+[[bin]]
+name = "mcp-server-stdio"
+path = "src/bin/mcp_server_stdio.rs"
+
+[[bin]]
+name = "mcp-client"
+path = "src/bin/mcp_client.rs"
+
+[[bin]]
+name = "test-mcp-protocol"
+path = "src/bin/test_mcp_protocol.rs"
+
+[[bin]]
+name = "test-mcp-simple"
+path = "src/bin/test_mcp_simple.rs"
+
+[[bin]]
+name = "show-mcp-protocol"
+path = "src/bin/show_mcp_protocol.rs"
+
+[[bin]]
+name = "show-protocol-examples"
+path = "src/bin/show_protocol_examples.rs"
+
+[[bin]]
+name = "show-simple-protocol"
+path = "src/bin/show_simple_protocol.rs"
+
+[dependencies]
+# Memgraph connectivity
+neo4rs = "0.7"
+tokio = { version = "1.47", features = ["full"] }
+
+# Fast parsing
+tree-sitter = "0.22"
+tree-sitter-rust = "0.21"
+
+# Semantic analysis
+lsp-types = "0.95"
+lsp-server = "0.7"
+tower-lsp = "0.20"
+
+# Workspace analysis
+cargo_metadata = "0.18"
+walkdir = "2.5"
+notify = "6.1"
+
+# MCP protocol
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio-tungstenite = "0.21"
+
+# Performance and utilities
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1.18", features = ["v4"] }
+dashmap = "5.5"
+rayon = "1.11"
+clap = { version = "4.5", features = ["derive"] }
+
