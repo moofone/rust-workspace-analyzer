@@ -106,7 +106,40 @@ fn main() {
             "content": [
                 {
                     "type": "text",
-                    "text": "# Workspace Analysis\\n\\n{\\n  \\"analysis_timestamp\\": 1755718472,\\n  \\"summary\\": {\\n    \\"total_functions\\": 5172,\\n    \\"total_types\\": 2035,\\n    \\"total_dependencies\\": 16409,\\n    \\"modules\\": {\\n      \\"trading-core\\": 245,\\n      \\"trading-strategy\\": 892,\\n      \\"trading-runtime\\": 1234\\n    }\\n  },\\n  \\"top_functions\\": [\\n    {\\n      \\"name\\": \\"new\\",\\n      \\"crate\\": \\"trading-core\\",\\n      \\"visibility\\": \\"pub\\",\\n      \\"file\\": \\"/path/to/trading-core/src/position.rs\\",\\n      \\"line_start\\": 45\\n    }\\n  ],\\n  \\"top_types\\": [\\n    {\\n      \\"name\\": \\"Position\\",\\n      \\"type_kind\\": \\"struct\\",\\n      \\"crate\\": \\"trading-core\\",\\n      \\"visibility\\": \\"pub\\",\\n      \\"file\\": \\"/path/to/trading-core/src/position.rs\\",\\n      \\"line_start\\": 12\\n    }\\n  ]\\n}"
+                    "text": r#"# Workspace Analysis
+
+{
+  "analysis_timestamp": 1755718472,
+  "summary": {
+    "total_functions": 5172,
+    "total_types": 2035,
+    "total_dependencies": 16409,
+    "modules": {
+      "trading-core": 245,
+      "trading-strategy": 892,
+      "trading-runtime": 1234
+    }
+  },
+  "top_functions": [
+    {
+      "name": "new",
+      "crate": "trading-core",
+      "visibility": "pub",
+      "file": "/path/to/trading-core/src/position.rs",
+      "line_start": 45
+    }
+  ],
+  "top_types": [
+    {
+      "name": "Position",
+      "type_kind": "struct",
+      "crate": "trading-core",
+      "visibility": "pub",
+      "file": "/path/to/trading-core/src/position.rs",
+      "line_start": 12
+    }
+  ]
+}"#
                 }
             ]
         }
@@ -192,9 +225,9 @@ fn main() {
     println!("   4. Claude Code gets deep workspace understanding! 🧠");
     
     println!("\\n✅ **What Claude Code Can Now Do:**");
-    println!("   • \\"What's the architecture of this trading system?\\"");
-    println!("   • \\"What happens if I change the PositionManager interface?\\"");
-    println!("   • \\"Are there any layer violations in my code?\\"");
-    println!("   • \\"Show me circular dependencies\\"");
-    println!("   • \\"What types and functions are available across all crates?\\"");
+    println!("   • 'What's the architecture of this trading system?'");
+    println!("   • 'What happens if I change the PositionManager interface?'");
+    println!("   • 'Are there any layer violations in my code?'");
+    println!("   • 'Show me circular dependencies'");
+    println!("   • 'What types and functions are available across all crates?'");
 }

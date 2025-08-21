@@ -6,7 +6,7 @@ use tree_sitter::{Parser, Tree};
 use cargo_metadata::{MetadataCommand, Package};
 use tree_sitter_rust;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RustFunction {
     pub name: String,
     pub qualified_name: String,
@@ -1091,7 +1091,7 @@ impl WorkspaceAnalyzer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WorkspaceSnapshot {
     pub functions: Vec<RustFunction>,
     pub types: Vec<RustType>,

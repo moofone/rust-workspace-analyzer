@@ -1,12 +1,19 @@
-# Rust Workspace Analyzer for Trading Backend PoC
+# Rust Workspace Analyzer with Hybrid LSP Integration
 
-A specialized MCP (Model Context Protocol) server that provides deep architectural analysis and insights for the trading-backend-poc Rust workspace, designed for seamless integration with Claude Code.
+A specialized MCP (Model Context Protocol) server that provides deep architectural analysis and insights for Rust workspaces, featuring a **hybrid analysis engine** that combines tree-sitter's speed with rust-analyzer's semantic accuracy for enhanced code understanding.
 
 ## 🚀 Features
 
-### 📊 Comprehensive Workspace Analysis
-- **Function Reference Tracking**: Accurately counts function calls across crate boundaries
-- **Cross-Crate Dependency Analysis**: Identifies dependencies between workspace crates
+### 🔬 Hybrid Analysis Engine
+- **Tree-sitter + LSP Integration**: Combines fast syntax analysis with accurate semantic information
+- **Progressive Enhancement**: Fast tree-sitter results enhanced by rust-analyzer in background
+- **Graceful Fallback**: Continues working when LSP is unavailable with intelligent degradation
+- **Background LSP Initialization**: Non-blocking startup with immediate tree-sitter responses
+
+### 📊 Enhanced Workspace Analysis
+- **Semantic Symbol Resolution**: Accurate cross-crate function and type resolution using LSP
+- **Enhanced Reference Tracking**: Precise function calls with semantic context
+- **Cross-Crate Dependency Analysis**: Identifies dependencies with LSP-verified accuracy
 - **Architecture Violation Detection**: Finds layer violations and circular dependencies
 - **Test Coverage Analysis**: Identifies heavily-used functions without tests
 
@@ -22,12 +29,36 @@ A specialized MCP (Model Context Protocol) server that provides deep architectur
 - **Test Priority Ranking**: Prioritizes functions needing test coverage by usage metrics
 - **Coverage Statistics**: Per-crate coverage percentages and untested function counts
 
+## 🔬 Hybrid Analysis System
+
+The analyzer features a sophisticated hybrid approach that provides the best of both worlds:
+
+### 🚀 Fast Path (Tree-sitter)
+- **Immediate Response**: Results available in <500ms
+- **Syntax Analysis**: Accurate function and type extraction
+- **Dependency Mapping**: Basic cross-crate reference tracking
+- **Always Available**: No external dependencies
+
+### 🎯 Enhanced Path (Tree-sitter + LSP)
+- **Semantic Accuracy**: True symbol resolution via rust-analyzer
+- **Type Information**: Complete type definitions and implementations
+- **Cross-crate References**: Precise function call resolution
+- **Documentation**: Doc comments and deprecation status
+- **Intelligent Caching**: Memgraph-backed LSP result caching
+
+### 📈 Progressive Enhancement Strategy
+1. **Immediate**: Tree-sitter provides fast baseline analysis
+2. **Background**: LSP enhances results with semantic information
+3. **Caching**: Enhanced results cached for future requests
+4. **Fallback**: Graceful degradation when LSP unavailable
+
 ## 📦 Installation
 
 ### Prerequisites
-- **Rust**: Latest stable version
-- **Docker**: For Memgraph database (optional but recommended)
+- **Rust**: Latest stable version with rust-analyzer
+- **Docker**: For Memgraph database (required)
 - **Claude Code**: For MCP integration
+- **rust-analyzer**: LSP server (usually installed with Rust toolchain)
 
 ### Quick Install
 
@@ -56,7 +87,7 @@ cargo build --release --bin mcp-server-stdio
    chmod +x ~/.local/bin/rust-workspace-analyzer
    ```
 
-3. **Start Memgraph** (optional):
+3. **Start Memgraph**:
    ```bash
    docker run -d \
      --name memgraph-rust-analyzer \
@@ -179,44 +210,101 @@ The MCP server provides these tools to Claude Code:
 ## ⚙️ Configuration
 
 ### Environment Variables
-- `RUST_ANALYZER_CONFIG`: Path to configuration file
+- `RUST_ANALYZER_CONFIG`: Path to LSP configuration file
+- `HYBRID_ANALYZER_CONFIG`: Path to hybrid analysis configuration
 - `MEMGRAPH_URI`: Memgraph connection string (default: `bolt://localhost:7687`)
 - `RUST_LOG`: Logging level (default: `info`)
 
-### Configuration File
-Create `~/.config/rust-workspace-analyzer/config.json`:
+### Hybrid Analysis Configuration
+The analyzer includes comprehensive configuration for the hybrid system. Example configurations are provided in the `config/` directory:
+
+#### LSP Configuration (`config/lsp_config.toml`)
+```toml
+[server]
+executable_path = "rust-analyzer"
+init_timeout = 30
+request_timeout = 5
+check_on_save = true
+
+[cache]
+enabled = true
+ttl = 300  # 5 minutes
+max_entries = 10000
+
+[fallback]
+enable_graceful_fallback = true
+fallback_timeout = 2
+show_warnings = true
+
+[features]
+semantic_tokens = true
+document_symbols = true
+references = true
+definition = true
+```
+
+#### Hybrid Analysis Configuration (`config/hybrid_config.toml`)
+```toml
+[analysis]
+default_strategy = "Progressive"
+enable_progressive_enhancement = true
+lsp_enhancement_timeout = 10
+max_lsp_enhancements_per_analysis = 200
+
+[quality]
+min_lsp_confidence = 0.7
+min_tree_sitter_confidence = 0.5
+enhancement_success_threshold = 0.8
+```
+
+### Legacy Configuration File
+For backward compatibility, create `~/.config/rust-workspace-analyzer/config.json`:
 ```json
 {
   "memgraph": {
     "uri": "bolt://localhost:7687",
-    "username": "",
-    "password": "",
     "enabled": true
   },
   "analysis": {
     "max_file_size": 1000000,
-    "skip_test_files": false,
-    "cache_results": true
-  },
-  "logging": {
-    "level": "info",
-    "file": "~/.config/rust-workspace-analyzer/analyzer.log"
+    "cache_results": true,
+    "hybrid_enabled": true
   }
 }
 ```
 
 ## 🏗️ Architecture
 
-The analyzer uses a two-pass analysis approach:
+The analyzer uses a sophisticated hybrid architecture with multiple analysis layers:
 
-1. **Pass 1**: Build function registry and extract all symbols
-2. **Pass 2**: Resolve function references and build dependency graph
+### Analysis Flow
+1. **Fast Path**: Tree-sitter provides immediate syntax-based analysis
+2. **Enhancement Path**: LSP (rust-analyzer) adds semantic information
+3. **Caching Layer**: Memgraph stores enhanced results for performance
+4. **Fallback Strategy**: Graceful degradation when LSP unavailable
 
 ### Key Components
-- **WorkspaceAnalyzer**: Core analysis engine using tree-sitter
+
+#### Core Analysis Engine
+- **HybridWorkspaceAnalyzer**: Orchestrates tree-sitter and LSP analysis
+- **WorkspaceAnalyzer**: Tree-sitter based syntax analysis (baseline)
+- **EnhancedSymbolResolver**: LSP-powered semantic symbol resolution
 - **FunctionRegistry**: Fast function lookup and resolution
+
+#### LSP Integration
+- **LspManager**: Background LSP lifecycle management
+- **LspClient**: rust-analyzer communication wrapper
+- **LspCache**: Intelligent caching of LSP results in Memgraph
+- **FallbackManager**: Graceful degradation strategies
+
+#### Data Layer
 - **MemgraphClient**: Graph database for complex dependency queries
+- **AnalysisCache**: Multi-level caching (memory + persistent)
+- **HybridAnalysisResult**: Combined tree-sitter and LSP data
+
+#### Protocol Layer
 - **MCP Server**: Protocol implementation for Claude Code integration
+- **Progressive Enhancement**: Non-blocking LSP enhancement of responses
 
 ## 🤝 Integration with Claude Code
 
@@ -347,33 +435,7 @@ The analyzer implements accurate cross-crate function reference counting through
 - **Recommended**: Latest stable
 - **Edition Support**: 2018, 2021
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass: `cargo test`
-5. Submit a pull request
-
-### Development Setup
-```bash
-git clone https://github.com/anthropics/rust-workspace-analyzer
-cd rust-workspace-analyzer
-cargo build
-cargo test
-```
-
 **Important**: This tool is tailored for the trading-backend-poc project's specific architecture patterns and may not work correctly with other Rust projects.
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- **Issues**: GitHub Issues for bugs and feature requests
-- **Discussions**: GitHub Discussions for questions
-- **Documentation**: This README and inline code documentation
 
 ---
 

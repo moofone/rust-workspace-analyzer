@@ -95,3 +95,14 @@ uuid = { version = "1.18", features = ["v4"] }
 dashmap = "5.5"
 rayon = "1.11"
 clap = { version = "4.5", features = ["derive"] }
+
+# Configuration and serialization
+toml = "0.8"
+serde_yaml = "0.9"
+dirs = "5.0"
+num_cpus = "1.16"
+thiserror = "1.0"
+
+# Development dependencies for testing
+[dev-dependencies]
+tempfile = "3.8"

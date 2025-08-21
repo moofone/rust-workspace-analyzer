@@ -5,8 +5,9 @@ use tokio::sync::RwLock;
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use crate::analyzer::{WorkspaceAnalyzer, WorkspaceSnapshot};
+use crate::analyzer::{WorkspaceAnalyzer, WorkspaceSnapshot, HybridWorkspaceAnalyzer};
 use crate::graph::MemgraphClient;
+use crate::lsp::{LspConfig, models::HybridAnalysisResult};
 
 #[derive(Debug, Clone)]
 pub struct McpRequest {
@@ -31,9 +32,12 @@ pub struct McpError {
 
 pub struct WorkspaceMcpServer {
     analyzer: Arc<RwLock<WorkspaceAnalyzer>>,
+    hybrid_analyzer: Arc<RwLock<Option<HybridWorkspaceAnalyzer>>>,
     graph_client: Arc<RwLock<MemgraphClient>>,
     workspace_root: std::path::PathBuf,
     current_snapshot: Arc<RwLock<Option<WorkspaceSnapshot>>>,
+    current_hybrid_result: Arc<RwLock<Option<HybridAnalysisResult>>>,
+    hybrid_enabled: bool,
 }
 
 impl WorkspaceMcpServer {
@@ -45,11 +49,43 @@ impl WorkspaceMcpServer {
         
         let graph_client = MemgraphClient::new(workspace_name).await?;
         
+        // Try to initialize hybrid analyzer with default LSP config
+        let hybrid_analyzer = match HybridWorkspaceAnalyzer::new(workspace_root, Some(LspConfig::default())).await {
+            Ok(hybrid) => Some(hybrid),
+            Err(e) => {
+                eprintln!("Warning: Failed to initialize hybrid analyzer: {}", e);
+                None
+            }
+        };
+        
         Ok(Self {
             analyzer: Arc::new(RwLock::new(analyzer)),
+            hybrid_analyzer: Arc::new(RwLock::new(hybrid_analyzer)),
             graph_client: Arc::new(RwLock::new(graph_client)),
             workspace_root: workspace_root.to_path_buf(),
             current_snapshot: Arc::new(RwLock::new(None)),
+            current_hybrid_result: Arc::new(RwLock::new(None)),
+            hybrid_enabled: true, // Enable hybrid analysis by default
+        })
+    }
+    
+    /// Create MCP server with hybrid analysis disabled
+    pub async fn new_tree_sitter_only(workspace_root: &Path) -> Result<Self> {
+        let analyzer = WorkspaceAnalyzer::new(workspace_root)?;
+        let workspace_name = workspace_root.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown_workspace");
+        
+        let graph_client = MemgraphClient::new(workspace_name).await?;
+        
+        Ok(Self {
+            analyzer: Arc::new(RwLock::new(analyzer)),
+            hybrid_analyzer: Arc::new(RwLock::new(None)),
+            graph_client: Arc::new(RwLock::new(graph_client)),
+            workspace_root: workspace_root.to_path_buf(),
+            current_snapshot: Arc::new(RwLock::new(None)),
+            current_hybrid_result: Arc::new(RwLock::new(None)),
+            hybrid_enabled: false,
         })
     }
     
@@ -77,23 +113,74 @@ impl WorkspaceMcpServer {
     
     async fn handle_initialize(&self, request: McpRequest) -> McpResponse {
         // Perform initial workspace analysis
-        let snapshot = match self.analyzer.write().await.analyze_workspace() {
-            Ok(snapshot) => snapshot,
-            Err(e) => {
-                return McpResponse {
-                    id: request.id,
-                    result: None,
-                    error: Some(McpError {
-                        code: -32603,
-                        message: format!("Failed to analyze workspace: {}", e),
-                        data: None,
-                    }),
-                };
+        if self.hybrid_enabled {
+            // Try hybrid analysis first
+            if let Some(hybrid_analyzer) = self.hybrid_analyzer.write().await.as_mut() {
+                match hybrid_analyzer.analyze_workspace().await {
+                    Ok(hybrid_result) => {
+                        // Store both results
+                        *self.current_snapshot.write().await = Some(hybrid_result.tree_sitter_data.clone());
+                        *self.current_hybrid_result.write().await = Some(hybrid_result);
+                    }
+                    Err(e) => {
+                        eprintln!("Hybrid analysis failed, falling back to tree-sitter: {}", e);
+                        // Fallback to tree-sitter only
+                        match self.analyzer.write().await.analyze_workspace() {
+                            Ok(snapshot) => {
+                                *self.current_snapshot.write().await = Some(snapshot);
+                            }
+                            Err(e) => {
+                                return McpResponse {
+                                    id: request.id,
+                                    result: None,
+                                    error: Some(McpError {
+                                        code: -32603,
+                                        message: format!("Failed to analyze workspace: {}", e),
+                                        data: None,
+                                    }),
+                                };
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No hybrid analyzer available, use tree-sitter
+                match self.analyzer.write().await.analyze_workspace() {
+                    Ok(snapshot) => {
+                        *self.current_snapshot.write().await = Some(snapshot);
+                    }
+                    Err(e) => {
+                        return McpResponse {
+                            id: request.id,
+                            result: None,
+                            error: Some(McpError {
+                                code: -32603,
+                                message: format!("Failed to analyze workspace: {}", e),
+                                data: None,
+                            }),
+                        };
+                    }
+                }
             }
-        };
-        
-        // Store the snapshot
-        *self.current_snapshot.write().await = Some(snapshot);
+        } else {
+            // Tree-sitter only mode
+            match self.analyzer.write().await.analyze_workspace() {
+                Ok(snapshot) => {
+                    *self.current_snapshot.write().await = Some(snapshot);
+                }
+                Err(e) => {
+                    return McpResponse {
+                        id: request.id,
+                        result: None,
+                        error: Some(McpError {
+                            code: -32603,
+                            message: format!("Failed to analyze workspace: {}", e),
+                            data: None,
+                        }),
+                    };
+                }
+            }
+        }
         
         McpResponse {
             id: request.id,
@@ -180,6 +267,7 @@ impl WorkspaceMcpServer {
     
     async fn handle_workspace_context(&self, request: McpRequest) -> McpResponse {
         let snapshot = self.current_snapshot.read().await;
+        let hybrid_result = self.current_hybrid_result.read().await;
         
         // Parse parameters
         let limit_functions = request.params.as_ref()
@@ -202,16 +290,17 @@ impl WorkspaceMcpServer {
                 let module_summary = self.get_module_summary(&snapshot);
                 let crate_count = self.get_crate_count(&snapshot);
                 
-                // Build more concise summary
+                // Build more concise summary with hybrid information
                 let mut summary_text = format!(
-                    "# Workspace Analysis\n\n\
+                    "# Workspace Analysis{}\n\n\
                     ## 📊 Overview\n\
                     - **Workspace**: {}\n\
                     - **Total Crates**: {}\n\
                     - **Total Functions**: {}\n\
                     - **Total Types**: {}\n\
                     - **Function References**: {}\n\
-                    - **Cross-crate Calls**: {}\n\n",
+                    - **Cross-crate Calls**: {}\n",
+                    if hybrid_result.is_some() { " (Hybrid: Tree-sitter + LSP)" } else { " (Tree-sitter Only)" },
                     self.workspace_root.display(),
                     crate_count,
                     snapshot.functions.len(),
@@ -219,6 +308,23 @@ impl WorkspaceMcpServer {
                     snapshot.function_references.len(),
                     snapshot.function_references.iter().filter(|f| f.cross_crate).count()
                 );
+                
+                // Add hybrid analysis information if available
+                if let Some(hybrid) = hybrid_result.as_ref() {
+                    summary_text.push_str(&format!(
+                        "- **LSP Enhanced Functions**: {} ({:.1}%)\n\
+                        - **LSP Status**: {}\n\
+                        - **Analysis Strategy**: {:?}\n\
+                        - **Enhancement Success Rate**: {:.1}%\n\n",
+                        hybrid.enhanced_functions_count(),
+                        hybrid.enhancement_percentage(),
+                        if hybrid.lsp_available { "✅ Available" } else { "❌ Unavailable" },
+                        hybrid.merge_strategy,
+                        hybrid.enhancement_percentage()
+                    ));
+                } else {
+                    summary_text.push_str("\n");
+                }
                 
                 if !summary_only {
                     // Add limited function and type examples
