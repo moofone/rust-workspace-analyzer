@@ -1,0 +1,37 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Cargo lock file (uncomment if library)
+# Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+
+# Test artifacts
+*.profraw
+*.gcda
+*.gcno
+
+# Development specs
+spec/
+spec-plan/
+qa/
+
+# Docker
+docker-compose.yml
