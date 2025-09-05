@@ -1,0 +1,90 @@
+[workspace]
+# Primary workspace to analyze
+root = "/Users/greg/Dev/git/trading-backend-poc"
+#root = "/Users/greg/Dev/git/dummy-workspace"
+# Additional workspace roots for cross-workspace analysis
+additional_roots = []
+
+[analysis]
+# Recursive crate discovery
+recursive_scan = true
+# Include dev-dependencies in analysis
+include_dev_deps = true
+# Include build-dependencies
+include_build_deps = false
+# Only parse workspace member crates (skip external libraries)
+workspace_members_only = true
+# Skip these crates
+exclude_crates = ["bench-*"]
+
+[architecture]
+# Define layer hierarchy (lower index = lower layer)
+# Lower layers should NOT depend on higher layers
+layers = [
+    # Layer 1: Core utilities and types
+    { name = "core", crates = ["crate_a"] },
+    
+    # Layer 2: Business logic  
+    { name = "business", crates = ["crate_b"] },
+    
+    # Layer 3: Applications and binaries
+    { name = "app", crates = ["crate_c"] },
+]
+
+[memgraph]
+uri = "bolt://192.168.97.2:7687"
+username = ""
+password = ""
+# Clear graph on startup
+clean_start = true
+# Batch size for bulk inserts
+batch_size = 1000
+
+[embeddings]
+# Enable embedding generation for semantic search
+enabled = true
+# Model to use for embeddings
+model = "text-embedding-3-small"
+# Include these in embedding text
+include_in_embedding = [
+    "function_name",
+    "module_path",
+    "crate_name",
+    "doc_comments",
+    "parameter_types",
+    "return_type"
+]
+
+[performance]
+# Max parallel threads for parsing
+max_threads = 8
+# File cache size in MB
+cache_size_mb = 100
+# Enable incremental parsing
+incremental = true
+
+[framework]
+# Enable framework pattern detection
+enabled = true
+# Path to custom pattern definitions (optional)
+patterns_path = ""
+# Functions to exclude from framework analysis
+excluded_functions = []
+# Enable synthetic call generation
+synthetic_call_generation = true
+# Custom pattern files
+custom_patterns = []
+# Supported frameworks
+supported_frameworks = ["tokio", "actix-web", "async-std", "websocket"]
+
+[cross_crate]
+# Enable cross-crate analysis
+enabled = true
+# Path to global index cache (optional)
+global_index_path = ""
+# Use caching for global index
+use_cache = true
+# Enable incremental updates
+incremental_updates = true
+# Max memory usage for index in MB
+max_index_memory_mb = 100

@@ -1,0 +1,145 @@
+# Rust Workspace Analyzer - LSP Configuration
+# This file configures the hybrid analysis system that combines tree-sitter with rust-analyzer
+
+[server]
+# Path to rust-analyzer executable (use "rust-analyzer" if in PATH)
+executable_path = "rust-analyzer"
+
+# Additional arguments to pass to rust-analyzer
+args = []
+
+# Timeout for LSP server initialization (in seconds)
+init_timeout = 30
+
+# Timeout for individual LSP requests (in seconds)
+request_timeout = 5
+
+# Number of retry attempts for failed requests
+retry_attempts = 3
+
+# Delay between retry attempts (in milliseconds)
+retry_delay = 500
+
+# Enable rust-analyzer's check on save feature
+check_on_save = true
+
+# Enable procedural macro expansion
+proc_macro_enable = true
+
+# Enable build scripts
+build_scripts_enable = true
+
+# Additional rust-analyzer settings (JSON format)
+additional_settings = {}
+
+[cache]
+# Enable caching of LSP results
+enabled = true
+
+# Time-to-live for cache entries (in seconds)
+ttl = 300  # 5 minutes
+
+# Maximum number of cache entries to keep in memory
+max_entries = 10000
+
+# Maximum memory usage for cache (in bytes)
+max_memory_bytes = 104857600  # 100MB
+
+# Cache cleanup interval (in seconds)
+cleanup_interval = 600  # 10 minutes
+
+# Use persistent cache (Memgraph database)
+persistent = true
+
+[cache.invalidation]
+# Invalidate cache on file changes
+on_file_change = true
+
+# Invalidate cache when dependencies change
+on_dependency_change = true
+
+# Invalidate cache when workspace structure changes
+on_workspace_change = true
+
+# File patterns to watch for changes (glob patterns)
+watch_patterns = [
+    "**/*.rs",
+    "**/Cargo.toml",
+    "**/Cargo.lock"
+]
+
+# File patterns to ignore for cache invalidation
+ignore_patterns = [
+    "**/target/**",
+    "**/.git/**",
+    "**/node_modules/**"
+]
+
+[fallback]
+# Enable graceful fallback to tree-sitter when LSP is unavailable
+enable_graceful_fallback = true
+
+# Timeout before falling back to tree-sitter (in seconds)
+fallback_timeout = 2
+
+# Show warnings when falling back to tree-sitter
+show_warnings = true
+
+# Retry LSP connection after fallback
+retry_on_fallback = true
+
+# Maximum number of fallback retry attempts
+max_retry_attempts = 3
+
+# Retry interval for LSP recovery (in seconds)
+retry_interval = 10
+
+[performance]
+# Maximum number of concurrent LSP requests
+max_concurrent_requests = 10
+
+# Request batching size
+batch_size = 5
+
+# Request batching timeout (in milliseconds)
+batch_timeout = 100
+
+# Number of background processing threads
+background_threads = 4  # Adjust based on your CPU cores
+
+# Memory pressure threshold (in bytes)
+memory_pressure_threshold = 209715200  # 200MB
+
+# CPU usage threshold (percentage)
+cpu_usage_threshold = 80.0
+
+[features]
+# Enable semantic tokens for syntax highlighting
+semantic_tokens = true
+
+# Enable document symbols
+document_symbols = true
+
+# Enable workspace symbols
+workspace_symbols = true
+
+# Enable references finding
+references = true
+
+# Enable definition lookup
+definition = true
+
+# Enable hover information
+hover = true
+
+# Enable completion (can be resource intensive)
+completion = false
+
+# Enable diagnostics
+diagnostics = true
+
+# Enable code actions (not needed for analysis)
+code_actions = false
+
+# Enable incremental synchronization
+incremental_sync = true

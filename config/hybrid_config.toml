@@ -1,0 +1,87 @@
+# Rust Workspace Analyzer - Hybrid Analysis Configuration
+# This file configures the hybrid analysis engine behavior
+
+[analysis]
+# Default analysis strategy
+# Options: "TreeSitterOnly", "Progressive", "CachedLspOnly", "HybridIntelligent", "TreeSitterWithWarning"
+default_strategy = "Progressive"
+
+# Enable progressive enhancement (tree-sitter first, then LSP)
+enable_progressive_enhancement = true
+
+# Maximum time to wait for LSP enhancement (in seconds)
+lsp_enhancement_timeout = 10
+
+# Fallback to tree-sitter on LSP failure
+fallback_on_lsp_failure = true
+
+# Enable analysis result caching
+enable_caching = true
+
+# Cache TTL for analysis results (in seconds)
+cache_ttl = 300  # 5 minutes
+
+# Maximum functions to enhance with LSP per analysis
+max_lsp_enhancements_per_analysis = 200
+
+# Confidence threshold for intelligent merging (0.0 - 1.0)
+confidence_threshold = 0.8
+
+[mcp_server]
+# Enable hybrid analysis in MCP server
+hybrid_enabled = true
+
+# Provide fallback warnings in responses
+include_fallback_warnings = true
+
+# Maximum response time before fallback (in seconds)
+max_response_time = 5
+
+# Enable performance metrics in responses
+include_performance_metrics = true
+
+[quality]
+# Minimum confidence score for LSP results (0.0 - 1.0)
+min_lsp_confidence = 0.7
+
+# Minimum confidence score for tree-sitter results (0.0 - 1.0)
+min_tree_sitter_confidence = 0.5
+
+# Enhancement success rate threshold for strategy adaptation
+enhancement_success_threshold = 0.8
+
+# Maximum acceptable response time for fast operations (in milliseconds)
+fast_response_threshold = 500
+
+[diagnostics]
+# Enable diagnostic collection from LSP
+collect_lsp_diagnostics = true
+
+# Include diagnostic information in analysis results
+include_diagnostics_in_results = true
+
+# Maximum number of diagnostics to collect per file
+max_diagnostics_per_file = 50
+
+# Diagnostic severity levels to include
+# Options: "Error", "Warning", "Information", "Hint"
+include_severity_levels = ["Error", "Warning", "Information"]
+
+[monitoring]
+# Enable performance monitoring
+enable_monitoring = true
+
+# Monitoring data collection interval (in seconds)
+monitoring_interval = 60
+
+# Keep monitoring data for this many intervals
+monitoring_history_size = 100
+
+# Enable memory usage tracking
+track_memory_usage = true
+
+# Enable response time tracking
+track_response_times = true
+
+# Enable LSP availability tracking
+track_lsp_availability = true
