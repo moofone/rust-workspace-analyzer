@@ -412,6 +412,8 @@ mod tests {
             is_generic: false,
             is_test: false,
             is_trait_impl: false,
+            is_method: false,
+            function_context: crate::parser::symbols::FunctionContext::Free,
             doc_comment: Some("Test function".to_string()),
             signature: "pub fn test_fn()".to_string(),
             parameters: vec![

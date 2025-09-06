@@ -432,14 +432,18 @@ mod macro_expansion_tests {
             crate_name: "test_crate".to_string(),
             file_path: "test.rs".to_string(),
             line_range: 5..6,
+            macro_name: "paste".to_string(),
             macro_type: "paste".to_string(),
             expansion_pattern: "paste! { [<$indicator>]::new() }".to_string(),
+            expanded_content: None,
             target_functions: Vec::new(),
             containing_function: Some("test_crate::process_indicators".to_string()),
             expansion_context: MacroContext {
                 expansion_id: "test.rs:5:paste".to_string(),
                 macro_type: "paste".to_string(),
                 expansion_site_line: 5,
+                name: "paste".to_string(),
+                kind: "paste_macro".to_string(),
             },
         };
         
@@ -468,14 +472,18 @@ mod macro_expansion_tests {
             crate_name: "test_crate".to_string(),
             file_path: "test.rs".to_string(),
             line_range: 10..11,
+            macro_name: "paste".to_string(),
             macro_type: "paste".to_string(),
             expansion_pattern: "paste! { [<$indicator>]::new(config) }".to_string(),
+            expanded_content: None,
             target_functions: Vec::new(),
             containing_function: Some("test_crate::create_indicator".to_string()),
             expansion_context: MacroContext {
                 expansion_id: "test.rs:10:paste".to_string(),
                 macro_type: "paste".to_string(),
                 expansion_site_line: 10,
+                name: "paste".to_string(),
+                kind: "paste_macro".to_string(),
             },
         };
         
@@ -496,18 +504,35 @@ mod macro_expansion_tests {
     }
 
     #[test]
-    fn test_indicator_resolver() {
-        let resolver = IndicatorResolver::new();
-        let indicators = resolver.resolve_indicators();
+    fn test_dynamic_indicator_resolver() {
+        let mut resolver = IndicatorResolver::new();
         
-        // Should have all the expected indicators
-        assert!(indicators.len() >= 23, "Should have at least 23 indicators");
-        assert!(indicators.contains(&"adx".to_string()));
-        assert!(indicators.contains(&"atr".to_string()));
-        assert!(indicators.contains(&"bb".to_string()));
-        assert!(indicators.contains(&"cci".to_string()));
-        assert!(indicators.contains(&"rsi".to_string()));
-        assert!(indicators.contains(&"sma".to_string()));
-        assert!(indicators.contains(&"ema".to_string()));
+        // Test with sample source code containing a macro invocation
+        let sample_source = r#"
+            define_indicator_enums!(
+                Atr: "Average True Range",
+                Bb: "Bollinger Bands",
+                Ema: "Exponential Moving Average",
+                Rsi: "Relative Strength Index",
+                Sma: "Simple Moving Average",
+                TestIndicator: "Test Indicator for Unit Testing"
+            );
+        "#;
+        
+        // Extract indicators from the source
+        let extracted = resolver.extract_from_source(sample_source);
+        
+        // Should extract all indicators from the macro
+        assert_eq!(extracted.len(), 6, "Should extract 6 indicators from the sample");
+        assert!(extracted.contains(&"Atr".to_string()));
+        assert!(extracted.contains(&"Bb".to_string()));
+        assert!(extracted.contains(&"Ema".to_string()));
+        assert!(extracted.contains(&"Rsi".to_string()));
+        assert!(extracted.contains(&"Sma".to_string()));
+        assert!(extracted.contains(&"TestIndicator".to_string()));
+        
+        // Resolved indicators should match
+        let indicators = resolver.resolve_indicators();
+        assert_eq!(indicators.len(), 6, "Should have 6 resolved indicators");
     }
 }

@@ -125,7 +125,7 @@ impl FrameworkPatterns {
     pub fn with_default_patterns() -> Self {
         let mut patterns = Self::new();
         patterns.add_tokio_patterns();
-        patterns.add_actix_web_patterns();
+        patterns.add_kameo_patterns();
         patterns.add_async_std_patterns();
         patterns.add_websocket_patterns();
         patterns.compile_patterns().unwrap_or_else(|e| {
@@ -172,50 +172,50 @@ impl FrameworkPatterns {
         });
     }
 
-    /// Add Actix-Web framework patterns
-    pub fn add_actix_web_patterns(&mut self) {
-        // Actor start pattern
+    /// Add Kameo actor framework patterns
+    pub fn add_kameo_patterns(&mut self) {
+        // Actor spawn pattern
         self.entry_points.push(EntryPointPattern {
-            name: "actix_actor_start".to_string(),
-            description: "Actix Actor start method".to_string(),
-            framework: "actix-web".to_string(),
+            name: "kameo_actor_spawn".to_string(),
+            description: "Kameo Actor spawn method".to_string(),
+            framework: "kameo".to_string(),
             pattern_type: EntryPointType::ActorSpawn,
-            function_pattern: r"\.start\(\)".to_string(),
-            triggers_methods: vec!["started".to_string(), "stopping".to_string(), "stopped".to_string()],
-            context_conditions: vec!["actix".to_string(), "Actor".to_string()],
+            function_pattern: r"kameo::spawn|ActorRef::spawn".to_string(),
+            triggers_methods: vec!["on_start".to_string(), "on_stop".to_string(), "on_panic".to_string()],
+            context_conditions: vec!["kameo".to_string(), "Actor".to_string()],
         });
 
         // Actor trait dispatch
         self.trait_dispatch.push(TraitDispatchPattern {
-            name: "actix_actor_trait".to_string(),
-            description: "Actix Actor trait methods".to_string(),
-            framework: "actix-web".to_string(),
+            name: "kameo_actor_trait".to_string(),
+            description: "Kameo Actor trait methods".to_string(),
+            framework: "kameo".to_string(),
             trait_name: "Actor".to_string(),
-            dispatch_method: "started|stopping|stopped".to_string(),
-            target_methods: vec!["started".to_string(), "stopping".to_string(), "stopped".to_string()],
+            dispatch_method: "on_start|on_stop|on_panic".to_string(),
+            target_methods: vec!["on_start".to_string(), "on_stop".to_string(), "on_panic".to_string()],
             dispatch_conditions: vec!["impl.*Actor".to_string()],
         });
 
-        // Handler trait dispatch
+        // Message trait dispatch
         self.trait_dispatch.push(TraitDispatchPattern {
-            name: "actix_handler_trait".to_string(),
-            description: "Actix Handler trait methods".to_string(),
-            framework: "actix-web".to_string(),
-            trait_name: "Handler".to_string(),
+            name: "kameo_message_trait".to_string(),
+            description: "Kameo Message trait methods".to_string(),
+            framework: "kameo".to_string(),
+            trait_name: "Message".to_string(),
             dispatch_method: "handle".to_string(),
             target_methods: vec!["handle".to_string()],
-            dispatch_conditions: vec!["impl.*Handler".to_string()],
+            dispatch_conditions: vec!["impl.*Message".to_string()],
         });
 
         // Actor pattern
         self.actor_patterns.push(ActorPattern {
-            name: "actix_actor".to_string(),
-            description: "Actix Actor system".to_string(),
-            framework: "actix-web".to_string(),
+            name: "kameo_actor".to_string(),
+            description: "Kameo Actor system".to_string(),
+            framework: "kameo".to_string(),
             actor_trait: "Actor".to_string(),
-            lifecycle_methods: vec!["started".to_string(), "stopping".to_string(), "stopped".to_string()],
+            lifecycle_methods: vec!["on_start".to_string(), "on_stop".to_string(), "on_panic".to_string()],
             message_handlers: vec!["handle".to_string()],
-            spawn_patterns: vec![r"\.start\(\)".to_string()],
+            spawn_patterns: vec![r"kameo::spawn".to_string(), r"ActorRef::spawn".to_string()],
         });
     }
 

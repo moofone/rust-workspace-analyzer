@@ -1,7 +1,7 @@
 [package]
 name = "workspace-analyzer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 description = "Tree-sitter based Rust workspace analyzer with Memgraph GraphRAG and MCP protocol support"
 license = "MIT"
 authors = ["Greg Tiller"]
@@ -21,51 +21,6 @@ path = "src/main.rs"
 [[bin]]
 name = "mcp-server"
 path = "src/bin/mcp_server.rs"
-
-[[bin]]
-name = "test-parser"
-path = "src/bin/test_parser.rs"
-
-[[bin]]
-name = "test_minimal_type"
-path = "src/bin/test_minimal_type.rs"
-
-[[bin]]
-name = "test_incremental_parsing"
-path = "src/bin/test_incremental_parsing.rs"
-
-[[bin]]
-name = "test_unit_struct"
-path = "src/bin/test_unit_struct.rs"
-
-[[bin]]
-name = "debug_trading_ta"
-path = "debug_trading_ta.rs"
-
-# [[bin]]
-# name = "test_actor_fixes"
-# path = "test-debug/test_actor_fixes.rs"
-
-[[bin]]
-name = "test_exact_crash"
-path = "src/bin/test_exact_crash.rs"
-
-[[bin]]
-name = "test_trading_backend"
-path = "src/bin/test_trading_backend.rs"
-
-[[bin]]
-name = "test_trading_file"
-path = "src/bin/test_trading_file.rs"
-
-# [[bin]]
-# name = "test_test_detection"
-# path = "test-debug/test_test_detection.rs"
-
-# [[bin]]
-# name = "test_simple_query"
-# path = "test-debug/test_simple_query.rs"
-
 
 [dependencies]
 # Core parsing with tree-sitter
@@ -112,16 +67,3 @@ blake3 = "1.5"
 tempfile = "3.8"
 criterion = "0.5"
 tokio-test = "0.4"
-
-# [[bin]]
-# name = "check_edges"
-# path = "test-debug/check_edges.rs"
-
-# [[bin]]
-# name = "test_message_actor_detection"
-# path = "test-debug/test_message_actor_detection.rs"
-
-# [[bin]]
-# name = "test_scoped_message_impl"
-# path = "test-debug/test_scoped_message_impl.rs"
-

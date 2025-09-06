@@ -386,6 +386,8 @@ impl ReferenceResolver {
                             expansion_id: format!("trait_method::{}::{}", trait_name, method_name),
                             macro_type: "trait_method".to_string(),
                             expansion_site_line: impl_block.line_start,
+                            name: method_name.to_string(),
+                            kind: "trait_dispatch".to_string(),
                         }),
                         synthetic_confidence: 0.8, // Lower confidence since it's potential dispatch
                     };
@@ -478,6 +480,8 @@ mod tests {
             is_generic: false,
             is_test: false,
             is_trait_impl: false,
+            is_method: false,
+            function_context: FunctionContext::Free,
             doc_comment: None,
             signature: "pub fn test_fn()".to_string(),
             parameters: Vec::new(),

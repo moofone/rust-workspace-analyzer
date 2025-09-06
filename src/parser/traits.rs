@@ -192,6 +192,8 @@ mod tests {
             is_generic: false,
             is_test: false,
             is_trait_impl: false,
+            is_method: false,
+            function_context: crate::parser::symbols::FunctionContext::Free,
             doc_comment: None,
             signature: format!("pub fn {}()", name),
             parameters: Vec::new(),

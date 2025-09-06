@@ -5,14 +5,7 @@ use tree_sitter::{Language, Parser, Query, QueryCursor, Tree};
 
 use crate::parser::symbols::*;
 
-// Static list of indicators from the trading-ta crate
-// Using static array to avoid allocations per file
-static INDICATORS: &[&str] = &[
-    "Alma", "ApproximateQuartiles", "Atr", "Bb", "Cvd", "CvdTrend",
-    "DeltaVix", "Divergence", "Dmi", "Ema", "Lwpi", "Macd",
-    "MultiLengthRsi", "OIIndicatorSuite", "Qama", "Rma", "Rsi", 
-    "Sma", "Supertrail", "Supertrend", "Tdfi", "Trendilo", "Vwma"
-];
+// Hardcoded indicators removed - now discovered dynamically from source code patterns
 
 pub struct RustParser {
     parser: Parser,
@@ -47,31 +40,126 @@ struct MacroPattern {
 /// Helper struct for enhanced function context resolution
 #[derive(Debug, Clone)]
 struct FunctionWithRange {
-    id: String,
+    id: String, 
     name: String,
     line_range: std::ops::Range<usize>,
 }
 
-/// Indicator resolution for trading indicators
+/// Implementation-agnostic pattern resolver - discovers patterns from source code
 #[derive(Debug, Clone)]
 pub struct IndicatorResolver {
-    static_indicators: Vec<String>,
+    discovered_patterns: Vec<String>,
 }
 
 impl IndicatorResolver {
     pub fn new() -> Self {
         Self {
-            static_indicators: vec![
-                "adx", "atr", "bb", "cci", "dmi", "ema", "fibonacci_retracement",
-                "ichimoku_cloud", "keltner_channel", "macd", "mfi", "obv", "parabolic_sar",
-                "roc", "rsi", "sma", "stochastic_oscillator", "trix", "ultimate_oscillator",
-                "volume_profile", "williams_r", "wma", "zigzag"
-            ].into_iter().map(String::from).collect()
+            discovered_patterns: Vec::new(),
         }
     }
     
+    /// Extract pattern identifiers from macro invocations in the given source.
+    /// Implementation-agnostic - works with any codebase patterns.
+    pub fn extract_from_source(&mut self, source: &str) -> Vec<String> {
+        let mut patterns = Vec::new();
+        
+        // Strategy 1: Look for define_indicator_enums! macro invocations
+        if let Some(start) = source.find("define_indicator_enums!") {
+            if let Some(paren) = source[start..].find('(') {
+                let rest = &source[start + paren + 1..];
+                if let Some(end) = rest.find(");") {
+                    let content = &rest[..end];
+                    for part in content.split(',') {
+                        let token = part.trim();
+                        if token.is_empty() { continue; }
+                        if let Some((name, _desc)) = token.split_once(':') {
+                            let ident = name.trim();
+                            if !ident.is_empty() {
+                                patterns.push(ident.to_string());
+                            }
+                        } else if token.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                            patterns.push(token.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Strategy 2: Look for enum definitions that might be pattern sources
+        self.extract_enum_variants(source, &mut patterns);
+        
+        // Strategy 3: Look for loop iterations over collections
+        self.extract_loop_variables(source, &mut patterns);
+        
+        // Merge without duplicates
+        for pattern in &patterns {
+            if !self.discovered_patterns.iter().any(|p| p.eq_ignore_ascii_case(pattern)) {
+                self.discovered_patterns.push(pattern.clone());
+            }
+        }
+        
+        patterns
+    }
+    
+    /// Extract enum variants that could be iteration targets
+    fn extract_enum_variants(&self, source: &str, patterns: &mut Vec<String>) {
+        // Look for enum definitions with camelCase or PascalCase variants
+        let lines: Vec<&str> = source.lines().collect();
+        let mut in_enum = false;
+        
+        for line in lines {
+            let trimmed = line.trim();
+            if trimmed.starts_with("pub enum") || trimmed.starts_with("enum") {
+                in_enum = true;
+                continue;
+            }
+            
+            if in_enum {
+                if trimmed == "}" {
+                    in_enum = false;
+                    continue;
+                }
+                
+                // Extract variant names
+                if let Some(variant) = trimmed.split(',').next() {
+                    let variant = variant.trim();
+                    if !variant.is_empty() && variant.chars().next().unwrap_or(' ').is_uppercase() {
+                        patterns.push(variant.to_string());
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Extract variables that are being iterated over
+    fn extract_loop_variables(&self, source: &str, patterns: &mut Vec<String>) {
+        // Look for patterns like: for item in ITEMS.iter()
+        let lines: Vec<&str> = source.lines().collect();
+        
+        for line in lines {
+            let trimmed = line.trim();
+            if trimmed.contains("for ") && trimmed.contains(" in ") {
+                // Extract the collection being iterated
+                if let Some(in_pos) = trimmed.find(" in ") {
+                    let collection_part = &trimmed[in_pos + 4..];
+                    if let Some(iter_part) = collection_part.split_whitespace().next() {
+                        let collection = iter_part.replace(".iter()", "").replace(".into_iter()", "");
+                        if collection.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                            patterns.push(collection);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn resolve_patterns(&self) -> &[String] {
+        &self.discovered_patterns
+    }
+    
+    /// Backwards compatibility method
     pub fn resolve_indicators(&self) -> &[String] {
-        &self.static_indicators
+        self.resolve_patterns()
     }
 }
 
@@ -144,6 +232,8 @@ impl SyntheticCallGenerator {
                         expansion_id: expansion.id.clone(),
                         macro_type: expansion.macro_type.clone(),
                         expansion_site_line: expansion.line_range.start,
+                        name: expansion.macro_type.clone(),
+                        kind: "expansion".to_string(),
                     }),
                     synthetic_confidence: 0.95,
                 });
@@ -176,6 +266,8 @@ impl SyntheticCallGenerator {
                             expansion_id: expansion.id.clone(),
                             macro_type: expansion.macro_type.clone(),
                             expansion_site_line: expansion.line_range.start,
+                            name: expansion.macro_type.clone(),
+                            kind: "expansion".to_string(),
                         }),
                         synthetic_confidence: 0.7, // Lower confidence since we're guessing types
                     });
@@ -201,6 +293,8 @@ impl SyntheticCallGenerator {
                         expansion_id: expansion.id.clone(),
                         macro_type: expansion.macro_type.clone(),
                         expansion_site_line: expansion.line_range.start,
+                        name: expansion.macro_type.clone(),
+                        kind: "expansion".to_string(),
                     }),
                     synthetic_confidence: 0.95,
                 });
@@ -280,125 +374,21 @@ impl RustParser {
         file_path: &Path,
         crate_name: &str,
     ) -> Result<ParsedSymbols> {
+        // Use the new AST walker for parsing
+        use crate::parser::ast_walker::UnifiedWalker;
+        use std::path::PathBuf;
+        
         let tree = self.parser.parse(source, None).ok_or_else(|| {
             anyhow::anyhow!("Failed to parse source for: {}", file_path.display())
         })?;
-
-        let mut symbols = ParsedSymbols::new();
-        let source_bytes = source.as_bytes();
-
-        // Detect if this is a test file
-        let is_test = self.is_test_file(file_path);
-
-        symbols
-            .modules
-            .extend(self.extract_modules(&tree, source_bytes, file_path, crate_name)?);
-
-        symbols
-            .imports
-            .extend(self.extract_imports(&tree, source_bytes, file_path)?);
-
-        symbols.functions.extend(self.extract_functions(
-            &tree,
-            source_bytes,
-            file_path,
-            crate_name,
-            is_test,
-        )?);
-
-        symbols.types.extend(self.extract_types(
-            &tree,
-            source_bytes,
-            file_path,
-            crate_name,
-            is_test,
-        )?);
-
-        let impls = self.extract_impls(&tree, source_bytes, file_path, crate_name)?;
         
-        // Add impl methods to the functions list (they are properly marked as trait implementations)
-        for impl_block in &impls {
-            symbols.functions.extend(impl_block.methods.clone());
-        }
+        let mut walker = UnifiedWalker::new(
+            source.as_bytes(),
+            crate_name.to_string(),
+            PathBuf::from(file_path),
+        );
         
-        symbols.impls.extend(impls);
-
-        // Extract calls, passing functions so macro expansion can find containing functions
-        let calls = self.extract_calls(&tree, source_bytes, file_path, crate_name, &symbols.functions)?;
-        symbols.calls.extend(calls);
-
-        symbols.actors.extend(self.extract_actors(
-            &tree,
-            source_bytes,
-            file_path,
-            crate_name,
-            is_test,
-        )?);
-
-        symbols.actor_spawns.extend(self.extract_actor_spawns(
-            &tree,
-            source_bytes,
-            file_path,
-            crate_name,
-        )?);
-
-        // Extract distributed actors and message flows
-        symbols
-            .distributed_actors
-            .extend(self.extract_distributed_actors(
-                &tree,
-                source_bytes,
-                file_path,
-                crate_name,
-                is_test,
-            )?);
-
-        symbols.message_types.extend(self.extract_message_types(
-            &tree,
-            source_bytes,
-            file_path,
-            crate_name,
-        )?);
-
-        symbols
-            .message_handlers
-            .extend(self.extract_message_handlers(&tree, source_bytes, file_path, crate_name)?);
-
-        // Link message handlers to actors' local_messages field
-        self.link_message_handlers_to_actors(&mut symbols);
-
-        // Extract distributed message flows (messages being sent between actors)
-        symbols
-            .distributed_message_flows
-            .extend(self.extract_distributed_message_flows(
-                &tree,
-                source_bytes,
-                file_path,
-                crate_name,
-            )?);
-
-        let actor_ref_map = self.detect_actor_ref_variables(&tree, source_bytes)?;
-
-        let message_sends = self.extract_message_sends(
-            &tree,
-            source_bytes,
-            file_path,
-            crate_name,
-            &actor_ref_map,
-        )?;
-        
-        // Process message sends silently
-        
-        symbols.message_sends.extend(message_sends);
-
-        // Extract macro expansions (specifically paste! macros for trading indicators)
-        symbols.macro_expansions.extend(self.extract_macro_expansions(
-            source_bytes,
-            file_path,
-            crate_name,
-        )?);
-
-        Ok(symbols)
+        Ok(walker.walk(tree.root_node()))
     }
 
     fn is_test_file(&self, file_path: &Path) -> bool {
@@ -682,6 +672,103 @@ impl RustParser {
             }
         }
 
+        // Extract actors from #[distributed_actor] attribute
+        let attr_actors = self.extract_actors_from_attributes(tree, source, file_path, crate_name, is_test)?;
+        for attr_actor in attr_actors {
+            let actor_key = (attr_actor.name.clone(), attr_actor.crate_name.clone());
+            if seen_actors.insert(actor_key) {
+                actors.push(attr_actor);
+            }
+        }
+
+        Ok(actors)
+    }
+    
+    fn extract_actors_from_attributes(
+        &mut self,
+        tree: &Tree,
+        source: &[u8],
+        file_path: &Path,
+        crate_name: &str,
+        is_test: bool,
+    ) -> Result<Vec<RustActor>> {
+        let mut actors = Vec::new();
+        
+        // Query for all structs
+        let query_str = r#"
+        (struct_item
+          name: (type_identifier) @name
+        ) @struct
+        "#;
+        
+        let language = tree_sitter_rust::language();
+        let query = Query::new(&language, query_str)?;
+        let mut cursor = tree_sitter::QueryCursor::new();
+        
+        for query_match in cursor.matches(&query, tree.root_node(), source) {
+            let mut name: Option<String> = None;
+            let mut struct_node: Option<tree_sitter::Node> = None;
+            
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize];
+                match capture_name {
+                    "name" => {
+                        name = Some(capture.node.utf8_text(source)?.to_string());
+                    }
+                    "struct" => {
+                        struct_node = Some(capture.node);
+                    }
+                    _ => {}
+                }
+            }
+            
+            if let (Some(name), Some(node)) = (name, struct_node) {
+                // Check if this struct has the distributed_actor attribute
+                // Attributes are siblings, not children - need to check preceding siblings
+                let mut has_distributed_actor = false;
+                
+                // Check preceding siblings for attributes
+                let mut prev = node.prev_sibling();
+                while let Some(sibling) = prev {
+                    if sibling.kind() == "attribute_item" {
+                        if let Ok(attr_text) = sibling.utf8_text(source) {
+                            if attr_text.contains("distributed_actor") {
+                                has_distributed_actor = true;
+                            }
+                        }
+                    }
+                    prev = sibling.prev_sibling();
+                }
+                
+                if !has_distributed_actor {
+                    continue;
+                }
+                
+                let module_path = self.infer_module_path_with_crate(file_path, crate_name)?;
+                let qualified_name = format!("{}::{}", module_path, name);
+                
+                let actor = RustActor {
+                    id: format!("{}:{}:{}", file_path.display(), node.start_position().row + 1, name),
+                    name: name.clone(),
+                    qualified_name,
+                    crate_name: crate_name.to_string(),
+                    module_path: module_path.clone(),
+                    file_path: file_path.to_string_lossy().to_string(),
+                    line_start: node.start_position().row + 1,
+                    line_end: node.end_position().row + 1,
+                    visibility: "pub".to_string(), // Default to pub for distributed actors
+                    doc_comment: None,
+                    is_distributed: true,
+                    is_test,
+                    actor_type: ActorType::Distributed,
+                    local_messages: Vec::new(),
+                    inferred_from_message: false,
+                };
+                
+                actors.push(actor);
+            }
+        }
+        
         Ok(actors)
     }
     
@@ -761,7 +848,7 @@ impl RustParser {
                         doc_comment: None,
                         is_distributed: false, // Will be updated if we find distributed_actor! macro
                         is_test,
-                        actor_type: ActorImplementationType::Local,
+                        actor_type: ActorImplementationType::Local.into(),
                         local_messages: vec![message_type], // Start with the message we found
                         inferred_from_message: true, // Mark as inferred from Message impl
                     };
@@ -1160,6 +1247,8 @@ impl RustParser {
                 is_generic,
                 is_test,
                 is_trait_impl: false,  // This will be set to true when processing impl blocks
+                is_method: false,
+                function_context: FunctionContext::Free,
                 doc_comment,
                 signature,
                 parameters,
@@ -1229,10 +1318,21 @@ impl RustParser {
                 .unwrap_or_else(|| "private".to_string());
 
             let doc_comment = None; // Skip doc comment extraction to avoid segfaults
-            let is_generic = false; // Skip generic detection since we removed it from query
+            let is_generic = captures.contains_key("generic");
 
-            let fields = Vec::new(); // Skip field extraction to avoid segfaults
-            let variants = Vec::new(); // Skip variant extraction to avoid segfaults
+            // Extract fields for structs/unions
+            let fields = if kind == TypeKind::Struct || kind == TypeKind::Union {
+                self.extract_fields_from_node(name_node.parent().unwrap(), source)?
+            } else {
+                Vec::new()
+            };
+            
+            // Extract variants for enums  
+            let variants = if kind == TypeKind::Enum {
+                self.extract_variants_from_node(name_node.parent().unwrap(), source)?
+            } else {
+                Vec::new()
+            };
 
             let module_path = self.infer_module_path_with_crate(file_path, crate_name)?;
             let qualified_name = format!("{}::{}", module_path, name);
@@ -1266,6 +1366,80 @@ impl RustParser {
         Ok(None)
     }
 
+    fn extract_fields_from_node(&self, node: tree_sitter::Node, source: &[u8]) -> Result<Vec<Field>> {
+        let mut fields = Vec::new();
+        
+        if let Some(body) = node.child_by_field_name("body") {
+            let mut cursor = body.walk();
+            
+            for child in body.children(&mut cursor) {
+                if child.kind() == "field_declaration" {
+                    let field_name = child.child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .to_string();
+                    
+                    let field_type = child.child_by_field_name("type")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .to_string();
+                    
+                    // Check for visibility modifier (pub, pub(crate), etc.)
+                    let visibility = {
+                        let mut vis = "private".to_string();
+                        for sub_child in child.children(&mut child.walk()) {
+                            if sub_child.kind() == "visibility_modifier" {
+                                if let Ok(vis_text) = sub_child.utf8_text(source) {
+                                    vis = vis_text.to_string();
+                                    break;
+                                }
+                            }
+                        }
+                        vis
+                    };
+                    
+                    if !field_name.is_empty() {
+                        fields.push(Field {
+                            name: field_name,
+                            field_type,
+                            visibility,
+                            doc_comment: None,
+                        });
+                    }
+                }
+            }
+        }
+        
+        Ok(fields)
+    }
+    
+    fn extract_variants_from_node(&self, node: tree_sitter::Node, source: &[u8]) -> Result<Vec<Variant>> {
+        let mut variants = Vec::new();
+        
+        if let Some(body) = node.child_by_field_name("body") {
+            let mut cursor = body.walk();
+            
+            for child in body.children(&mut cursor) {
+                if child.kind() == "enum_variant" {
+                    let variant_name = child.child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .unwrap_or("")
+                        .to_string();
+                    
+                    if !variant_name.is_empty() {
+                        variants.push(Variant {
+                            name: variant_name,
+                            fields: Vec::new(),
+                            doc_comment: None,
+                        });
+                    }
+                }
+            }
+        }
+        
+        Ok(variants)
+    }
+
     fn parse_impl_match(
         &self,
         match_: tree_sitter::QueryMatch,
@@ -1293,7 +1467,7 @@ impl RustParser {
                 for child_idx in 0..body_node.child_count() {
                     if let Some(child) = body_node.child(child_idx) {
                         if child.kind() == "function_item" {
-                            if let Some(function) = self.parse_function_from_node_with_trait(child, source, file_path, crate_name, false, trait_name.as_deref())? {
+                            if let Some(function) = self.parse_function_from_node_with_impl(child, source, file_path, crate_name, false, type_name, trait_name.as_deref())? {
                                 methods.push(function);
                             }
                         }
@@ -1339,6 +1513,20 @@ impl RustParser {
         is_test_file: bool,
         trait_name: Option<&str>,
     ) -> Result<Option<RustFunction>> {
+        self.parse_function_from_node_with_impl(function_node, source, file_path, crate_name, is_test_file, "", trait_name)
+    }
+
+    /// Parse a function directly from a tree-sitter function_item node with impl context
+    fn parse_function_from_node_with_impl(
+        &self,
+        function_node: tree_sitter::Node,
+        source: &[u8],
+        file_path: &Path,
+        crate_name: &str,
+        is_test_file: bool,
+        type_name: &str,
+        trait_name: Option<&str>,
+    ) -> Result<Option<RustFunction>> {
         // Extract function name
         let name_node = function_node.child_by_field_name("name");
         if let Some(name_node) = name_node {
@@ -1366,6 +1554,18 @@ impl RustParser {
                         "async" => is_async = true,
                         "unsafe" => is_unsafe = true,
                         "type_parameters" => is_generic = true,
+                        "function_modifiers" => {
+                            // Check inside function_modifiers for async/unsafe
+                            for mod_idx in 0..child.child_count() {
+                                if let Some(mod_child) = child.child(mod_idx) {
+                                    match mod_child.kind() {
+                                        "async" => is_async = true,
+                                        "unsafe" => is_unsafe = true,
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1406,6 +1606,17 @@ impl RustParser {
                 is_generic,
                 is_test: is_test_file || name == "test" || name.starts_with("test_"),
                 is_trait_impl: trait_name.is_some(),  // True if this is part of a trait implementation
+                is_method: true,  // This is an impl block method
+                function_context: if let Some(trait_name) = trait_name { 
+                    FunctionContext::TraitImpl {
+                        trait_name: trait_name.to_string(),
+                        type_name: type_name.to_string(),
+                    }
+                } else { 
+                    FunctionContext::RegularImpl {
+                        type_name: type_name.to_string(),
+                    }
+                },
                 doc_comment: None, // We'll extract this if needed
                 signature,
                 parameters,
@@ -1975,6 +2186,8 @@ impl RustParser {
                                     expansion_id: format!("{}:{}:define_indicator_enums", file_path.display(), line_number),
                                     macro_type: "define_indicator_enums".to_string(),
                                     expansion_site_line: line_number,
+                                    name: "define_indicator_enums".to_string(),
+                                    kind: "macro_invocation".to_string(),
                                 }),
                                 synthetic_confidence: 0.95,
                             };
@@ -2011,14 +2224,18 @@ impl RustParser {
                     crate_name: crate_name.to_string(),
                     file_path: file_path.to_string_lossy().to_string(),
                     line_range: line_number..line_number + 1,
+                    macro_name: "paste".to_string(),
                     macro_type: "paste".to_string(),
                     expansion_pattern: line.to_string(),
+                    expanded_content: None,
                     target_functions: vec![],
                     containing_function: Some(caller_id.clone()),
                     expansion_context: MacroContext {
                         expansion_id: format!("{}:{}:{}", crate_name, file_path.display(), line_number),
                         macro_type: "paste".to_string(),
                         expansion_site_line: line_number,
+                        name: "paste".to_string(),
+                        kind: "paste_macro".to_string(),
                     },
                 };
                 
@@ -2032,6 +2249,8 @@ impl RustParser {
                         expansion_id: expansion.id.clone(),
                         macro_type: expansion.macro_type.clone(),
                         expansion_site_line: line_number,
+                        name: expansion.macro_type.clone(),
+                        kind: "expansion".to_string(),
                     });
                     call.file_path = file_path.to_string_lossy().to_string();
                     call.from_crate = crate_name.replace('-', "_");
@@ -2059,14 +2278,18 @@ impl RustParser {
                     crate_name: crate_name.to_string(),
                     file_path: file_path.to_string_lossy().to_string(),
                     line_range: line_number..line_number + 1,
+                    macro_name: "paste".to_string(),
                     macro_type: "paste".to_string(),
                     expansion_pattern: line.to_string(),
+                    expanded_content: None,
                     target_functions: vec![],
                     containing_function: Some(caller_id.clone()),
                     expansion_context: MacroContext {
                         expansion_id: format!("{}:{}:{}_input", crate_name, file_path.display(), line_number),
                         macro_type: "paste".to_string(),
                         expansion_site_line: line_number,
+                        name: "paste".to_string(),
+                        kind: "paste_macro".to_string(),
                     },
                 };
                 
@@ -2081,6 +2304,8 @@ impl RustParser {
                         expansion_id: expansion.id.clone(),
                         macro_type: expansion.macro_type.clone(),
                         expansion_site_line: line_number,
+                        name: expansion.macro_type.clone(),
+                        kind: "expansion".to_string(),
                     });
                     call.file_path = file_path.to_string_lossy().to_string();
                     call.from_crate = crate_name.replace('-', "_");
@@ -2749,7 +2974,7 @@ impl RustParser {
             doc_comment: None,
             is_distributed: matches!(actor_type, ActorImplementationType::Distributed),
             is_test,
-            actor_type,
+            actor_type: actor_type.into(),
             local_messages: Vec::new(), // Will be populated by message handler detection
             inferred_from_message: false, // Explicitly declared with impl Actor
         };
@@ -3860,7 +4085,7 @@ impl RustParser {
             doc_comment: Some("Inferred from spawn call".to_string()),
             is_distributed: false,
             is_test: false, // Can't determine test status for inferred actors
-            actor_type: ActorImplementationType::Unknown,
+            actor_type: ActorImplementationType::Unknown.into(),
             local_messages: Vec::new(), // Inferred actors have no known local message handlers
             inferred_from_message: false, // Inferred from spawn, not Message impl
         })
@@ -3936,7 +4161,7 @@ impl RustParser {
                             doc_comment: Some("Derived Actor".to_string()),
                             is_distributed: false,
                             is_test: false, // Can't determine test status for derived actors
-                            actor_type: ActorImplementationType::Local,
+                            actor_type: ActorImplementationType::Local.into(),
                             local_messages: Vec::new(), // Derived actors need separate analysis for message handlers
                             inferred_from_message: false, // Explicitly derived with #[derive(Actor)]
                         };
@@ -4150,7 +4375,7 @@ impl RustParser {
                         doc_comment: Some("Inferred from ActorRef usage".to_string()),
                         is_distributed: false,
                         is_test: false, // Can't determine test status for type usage
-                        actor_type: ActorImplementationType::Unknown,
+                        actor_type: ActorImplementationType::Unknown.into(),
                         local_messages: Vec::new(), // Type usage actors have no known local message handlers
                         inferred_from_message: false, // Inferred from ActorRef usage, not Message impl
                     };
@@ -4185,14 +4410,18 @@ impl RustParser {
                 crate_name: crate_name.to_string(),
                 file_path: file_path.to_string_lossy().to_string(),
                 line_range: pattern.line..pattern.line+1,
+                macro_name: pattern.macro_type.clone(),
                 macro_type: pattern.macro_type.clone(),
                 expansion_pattern: pattern.pattern.clone(),
+                expanded_content: None,
                 target_functions: Vec::new(), // Will be populated by SyntheticCallGenerator
                 containing_function,          // Enhanced: resolved from function context
                 expansion_context: MacroContext {
                     expansion_id: format!("{}:{}:{}", file_path.display(), pattern.line, pattern.macro_type),
                     macro_type: pattern.macro_type.clone(),
                     expansion_site_line: pattern.line,
+                    name: pattern.macro_type.clone(),
+                    kind: "macro_pattern".to_string(),
                 },
             };
             
@@ -4462,8 +4691,10 @@ impl QuerySet {
             r#"
             (function_item
               (visibility_modifier)? @visibility
-              "async"? @async
-              "unsafe"? @unsafe
+              (function_modifiers
+                "async"? @async
+                "unsafe"? @unsafe
+              )?
               "fn" @fn
               name: (identifier) @name
               type_parameters: (type_parameters)? @generic
@@ -4482,21 +4713,25 @@ impl QuerySet {
                 (visibility_modifier)? @visibility
                 "struct" @struct
                 name: (type_identifier) @name
+                type_parameters: (type_parameters)? @generic
               )
               (enum_item
                 (visibility_modifier)? @visibility
                 "enum" @enum
                 name: (type_identifier) @name
+                type_parameters: (type_parameters)? @generic
               )
               (trait_item
                 (visibility_modifier)? @visibility
                 "trait" @trait
                 name: (type_identifier) @name
+                type_parameters: (type_parameters)? @generic
               )
               (type_item
                 (visibility_modifier)? @visibility
                 "type" @type_alias
                 name: (type_identifier) @name
+                type_parameters: (type_parameters)? @generic
               )
             ]
             "#,
@@ -4506,18 +4741,21 @@ impl QuerySet {
             &language,
             r#"
             (impl_item
+              type_parameters: (type_parameters)? @generic
               trait: (type_identifier) @trait_name
               "for"
-              type: (type_identifier) @type_name
+              type: [(type_identifier) (generic_type)] @type_name
               body: (declaration_list) @body
             ) @impl_block
             (impl_item
+              type_parameters: (type_parameters)? @generic
               trait: (type_identifier) @trait_name
               "for"
               type: (primitive_type) @type_name
               body: (declaration_list) @body
             ) @impl_block_primitive
             (impl_item
+              type_parameters: (type_parameters)? @generic
               trait: (generic_type
                 type: (type_identifier) @trait_name
               )
@@ -4526,6 +4764,7 @@ impl QuerySet {
               body: (declaration_list) @body
             ) @impl_block_generic
             (impl_item
+              type_parameters: (type_parameters)? @generic
               trait: (generic_type
                 type: (type_identifier) @trait_name
               )
@@ -4534,6 +4773,7 @@ impl QuerySet {
               body: (declaration_list) @body
             ) @impl_block_generic_primitive
             (impl_item
+              type_parameters: (type_parameters)? @generic
               trait: (scoped_type_identifier
                 path: (identifier) @trait_path
                 name: (type_identifier) @trait_name
@@ -4543,6 +4783,7 @@ impl QuerySet {
               body: (declaration_list) @body
             ) @impl_block_scoped
             (impl_item
+              type_parameters: (type_parameters)? @generic
               trait: (scoped_type_identifier
                 path: (scoped_identifier) @trait_path
                 name: (type_identifier) @trait_name
@@ -4566,9 +4807,17 @@ impl QuerySet {
               body: (declaration_list) @body
             ) @impl_block_scoped_primitive
             (impl_item
+              type_parameters: (type_parameters)? @generic
               type: (type_identifier) @type_name
               body: (declaration_list) @body
             ) @simple_impl_block
+            (impl_item
+              type_parameters: (type_parameters)? @generic
+              trait: (type_identifier) @trait_name
+              "for"
+              type: (generic_type) @type_name
+              body: (declaration_list) @body
+            ) @impl_generic_type
             "#,
         )?;
 

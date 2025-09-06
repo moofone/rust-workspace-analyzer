@@ -165,6 +165,100 @@ impl WorkspaceAnalyzer {
         crate::parser::references::resolve_all_references(&mut all_symbols).unwrap_or_else(|e| {
             eprintln!("  ⚠️ WARNING: Reference resolution failed: {}", e);
         });
+
+        // 4b. Crate-wide paste! macro linking: for each paste expansion, create
+        // synthetic calls to ALL functions in the same crate with the extracted method name.
+        // This removes the need for per-indicator edge cases (from_ohlcv, new, na, nz, etc.).
+        {
+            use crate::parser::symbols::{FunctionCall, CallType, MacroContext};
+
+            // Build name -> functions map per crate
+            let mut functions_by_crate_and_name: HashMap<(String, String), Vec<&crate::parser::symbols::RustFunction>> = HashMap::new();
+            for func in &all_symbols.functions {
+                functions_by_crate_and_name
+                    .entry((func.crate_name.clone(), func.name.clone()))
+                    .or_default()
+                    .push(func);
+            }
+
+            // Small helper: extract the identifier after the last '::' before the first '('
+            fn extract_method_name(pattern: &str) -> Option<String> {
+                let bytes = pattern.as_bytes();
+                let mut paren_idx = bytes.len();
+                for (i, &b) in bytes.iter().enumerate() {
+                    if b == b'(' { paren_idx = i; break; }
+                }
+                let mut i = paren_idx;
+                while i >= 2 {
+                    let j = i - 2;
+                    if bytes[j] == b':' && bytes[j + 1] == b':' {
+                        let mut start = j + 2;
+                        while start < paren_idx && (bytes[start].is_ascii_whitespace()) { start += 1; }
+                        if start < paren_idx {
+                            let c = bytes[start];
+                            if c.is_ascii_alphabetic() || c == b'_' {
+                                let mut end = start + 1;
+                                while end < paren_idx {
+                                    let c = bytes[end];
+                                    if !(c.is_ascii_alphanumeric() || c == b'_') { break; }
+                                    end += 1;
+                                }
+                                return Some(pattern[start..end].to_string());
+                            }
+                        }
+                        break;
+                    }
+                    i -= 1;
+                }
+                None
+            }
+
+            let mut synthetic_calls = Vec::new();
+            for expansion in &all_symbols.macro_expansions {
+                if expansion.macro_type != "paste" { continue; }
+                if let Some(method) = extract_method_name(&expansion.expansion_pattern) {
+                    let crate_key = (expansion.crate_name.clone(), method.clone());
+                    if let Some(targets) = functions_by_crate_and_name.get(&crate_key) {
+                        // Determine caller_id (if known), otherwise create a generic one
+                        let caller_id = expansion
+                            .containing_function
+                            .clone()
+                            .unwrap_or_else(|| format!("{}::macro_context", expansion.crate_name));
+
+                        for func in targets {
+                            let cross = func.crate_name != expansion.crate_name;
+                            synthetic_calls.push(FunctionCall {
+                                caller_id: caller_id.clone(),
+                                caller_module: expansion.file_path.clone(), // not exact, but unused downstream for linking
+                                callee_name: method.clone(),
+                                qualified_callee: Some(func.qualified_name.clone()),
+                                call_type: CallType::Direct,
+                                line: expansion.line(),
+                                cross_crate: cross,
+                                from_crate: expansion.crate_name.clone(),
+                                to_crate: Some(func.crate_name.clone()),
+                                file_path: expansion.file_path.clone(),
+                                is_synthetic: true,
+                                macro_context: Some(MacroContext {
+                                    expansion_id: expansion.id.clone(),
+                                    macro_type: expansion.macro_type.clone(),
+                                    expansion_site_line: expansion.line(),
+                                    name: expansion.macro_type.clone(),
+                                    kind: "expansion".to_string(),
+                                }),
+                                synthetic_confidence: 0.9,
+                            });
+                        }
+                    }
+                }
+            }
+
+            if !synthetic_calls.is_empty() {
+                eprintln!("  ➕ Adding {} crate-wide macro synthetic calls", synthetic_calls.len());
+                all_symbols.calls.extend(synthetic_calls);
+            }
+        }
+
         eprintln!("  ⏱️ Reference resolution: {:?}", resolve_timer.elapsed());
 
         // 5. Generate embeddings if provided
@@ -604,6 +698,8 @@ impl WorkspaceAnalyzer {
             return_type: Some("()".to_string()),
             embedding_text: None,
             module: "websocket_framework".to_string(),
+            function_context: crate::parser::symbols::FunctionContext::Free,
+            is_method: false,
         };
         framework_functions.push(websocket_dispatch_function);
 
@@ -623,6 +719,8 @@ impl WorkspaceAnalyzer {
             is_generic: false,
             is_test: false,
             is_trait_impl: false,
+            is_method: false,
+            function_context: crate::parser::symbols::FunctionContext::Free,
             doc_comment: Some("Synthetic framework dispatcher for Actor lifecycle methods".to_string()),
             signature: "fn lifecycle_dispatch()".to_string(),
             parameters: Vec::new(),

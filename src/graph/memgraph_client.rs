@@ -496,10 +496,13 @@ impl MemgraphClient {
         self.create_distributed_message_flows(&symbols.distributed_message_flows).await?;
 
         // Switch back to transactional mode for regular operations if we switched
-        // DISABLED: Causing connection pool hang
-        // if self.config.memgraph.performance.use_analytical_mode {
-        //     self.set_storage_mode_legacy(false).await?;
-        // }
+        if self.config.memgraph.performance.use_analytical_mode {
+            // Use the newer set_storage_mode method with proper timeout handling
+            if let Err(e) = self.set_storage_mode(StorageMode::InMemoryTransactional).await {
+                eprintln!("⚠️ Failed to switch back to transactional mode: {}. You may need to manually run: STORAGE MODE IN_MEMORY_TRANSACTIONAL", e);
+                // Don't fail the entire operation, but warn the user
+            }
+        }
 
         // Auto memory management if configured
         self.auto_memory_management(self.config.memgraph.memory.auto_free_threshold_mb).await?;
@@ -2139,7 +2142,7 @@ impl MemgraphClient {
             doc_comment: Some("Fallback actor created from spawn reference".to_string()),
             is_distributed: false,
             is_test: false, // Fallback actors are not test actors
-            actor_type: ActorImplementationType::Unknown,
+            actor_type: ActorImplementationType::Unknown.into(),
             local_messages: Vec::new(), // Fallback actors have no message handlers
             inferred_from_message: false, // Fallback actors are not inferred from Message impl
         };
@@ -2820,12 +2823,63 @@ impl MemgraphClient {
         Ok(())
     }
     
-    /// Create a single synthetic call relationship using existing patterns
+    /// Create a single synthetic call; prefer linking to real Function nodes by module+name.
     async fn create_single_synthetic_call(&self, call: &FunctionCall) -> Result<()> {
-        let query = Query::new(
+        let qualified = call
+            .qualified_callee
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        // Split qualified callee into module path and name ("mod::path::name")
+        let (callee_module, callee_name) = if let Some(pos) = qualified.rfind("::") {
+            (&qualified[..pos], &qualified[pos + 2..])
+        } else {
+            ("", qualified)
+        };
+
+        if !callee_module.is_empty() && !callee_name.is_empty() {
+            // Try to match existing function nodes by module + name and link to all of them
+            let find_query = Query::new(
+                "MATCH (f:Function {module: $module, name: $name}) RETURN f.id as id".to_string(),
+            )
+            .param("module", callee_module.to_string())
+            .param("name", callee_name.to_string());
+
+            let results = self.execute_query_collect(find_query).await?;
+
+            if !results.is_empty() {
+                for row in results {
+                    if let Ok(callee_id) = row.get::<String>("id") {
+                        let link_query = Query::new(
+                            "MATCH (caller:Function {id: $caller_id})
+                             MATCH (callee:Function {id: $callee_id})
+                             MERGE (caller)-[:CALLS {
+                                 line: $line,
+                                 is_synthetic: $is_synthetic,
+                                 created_by_macro: true,
+                                 confidence_score: $confidence_score
+                             }]->(callee)"
+                            .to_string(),
+                        )
+                        .param("caller_id", call.caller_id.clone())
+                        .param("callee_id", callee_id)
+                        .param("line", call.line as i64)
+                        .param("is_synthetic", call.is_synthetic)
+                        .param("confidence_score", call.synthetic_confidence as f64);
+
+                        let _ = self.run_query(link_query).await; // Ignore individual failures
+                    }
+                }
+                return Ok(());
+            }
+        }
+
+        // Fallback: create or match by qualified_name (ensures at least one target exists)
+        let fallback_query = Query::new(
             "MATCH (caller:Function {id: $caller_id})
              MERGE (callee:Function {qualified_name: $qualified_callee})
-             ON CREATE SET callee.name = split($qualified_callee, '::')[-1],
+             ON CREATE SET callee.name = $callee_name,
                            callee.is_synthetic = true,
                            callee.created_by_macro = true
              MERGE (caller)-[:CALLS {
@@ -2833,15 +2887,17 @@ impl MemgraphClient {
                  is_synthetic: $is_synthetic,
                  created_by_macro: true,
                  confidence_score: $confidence_score
-             }]->(callee)".to_string()
+             }]->(callee)"
+                .to_string(),
         )
         .param("caller_id", call.caller_id.clone())
-        .param("qualified_callee", call.qualified_callee.clone().unwrap_or_default())
+        .param("qualified_callee", qualified.to_string())
+        .param("callee_name", callee_name.to_string())
         .param("line", call.line as i64)
         .param("is_synthetic", call.is_synthetic)
         .param("confidence_score", call.synthetic_confidence as f64);
-        
-        self.run_query(query).await
+
+        self.run_query(fallback_query).await
     }
 
     /// Verify synthetic relationships exist for a specific macro expansion

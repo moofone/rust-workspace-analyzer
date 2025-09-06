@@ -1,4 +1,43 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+/// Context information for functions during parsing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FunctionContext {
+    Free,
+    RegularImpl { type_name: String },
+    TraitImpl { trait_name: String, type_name: String },
+    TraitDeclaration { trait_name: String },
+    MacroExpansion { macro_info: MacroContext },
+}
+
+/// Actor type for classification
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum ActorType {
+    Local,      // Local Kameo actor
+    Distributed, // Distributed Kameo actor
+    Unknown,
+}
+
+/// Macro invocation information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroInvocation {
+    pub name: String,
+    pub range: (usize, usize),
+    pub line_range: (usize, usize),
+    pub containing_function: Option<String>,
+    pub arguments: String,
+}
+
+/// Trait definition information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RustTrait {
+    pub name: String,
+    pub qualified_name: String,
+    pub file_path: PathBuf,
+    pub start_line: usize,
+    pub end_line: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedSymbols {
@@ -16,7 +55,11 @@ pub struct ParsedSymbols {
     pub distributed_actors: Vec<DistributedActor>,
     pub distributed_message_flows: Vec<DistributedMessageFlow>,
     pub macro_expansions: Vec<MacroExpansion>,
+    pub traits: Vec<RustTrait>,
+    pub function_calls: Vec<FunctionCall>,
+    pub macro_invocations: Vec<MacroInvocation>,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RustFunction {
@@ -34,6 +77,8 @@ pub struct RustFunction {
     pub is_generic: bool,
     pub is_test: bool,
     pub is_trait_impl: bool,
+    pub is_method: bool,
+    pub function_context: FunctionContext,
     pub doc_comment: Option<String>,
     pub signature: String,
     pub parameters: Vec<Parameter>,
@@ -73,7 +118,7 @@ pub struct RustType {
     pub module: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum TypeKind {
     Struct,
     Enum,
@@ -180,17 +225,42 @@ pub struct RustActor {
     pub doc_comment: Option<String>,
     pub is_distributed: bool,
     pub is_test: bool,
-    pub actor_type: ActorImplementationType,
+    pub actor_type: ActorType,
     pub local_messages: Vec<String>,
     pub inferred_from_message: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ActorImplementationType {
     Local,         // Standard kameo actor
     Distributed,   // Distributed actor
     Supervisor,    // Supervisor actor
+    KameoActor,    // Kameo actor
+    BasicActor,    // Basic actor
     Unknown,       // Could not determine type
+}
+
+impl From<ActorType> for ActorImplementationType {
+    fn from(actor_type: ActorType) -> Self {
+        match actor_type {
+            ActorType::Local => ActorImplementationType::Local,
+            ActorType::Distributed => ActorImplementationType::Distributed,
+            ActorType::Unknown => ActorImplementationType::Unknown,
+        }
+    }
+}
+
+impl From<ActorImplementationType> for ActorType {
+    fn from(actor_type: ActorImplementationType) -> Self {
+        match actor_type {
+            ActorImplementationType::Local => ActorType::Local,
+            ActorImplementationType::Distributed => ActorType::Distributed,
+            ActorImplementationType::Supervisor => ActorType::Local,  // Supervisors are local actors
+            ActorImplementationType::KameoActor => ActorType::Local,  // Regular Kameo actors are local
+            ActorImplementationType::BasicActor => ActorType::Local,  // Basic actors are local
+            ActorImplementationType::Unknown => ActorType::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,7 +359,7 @@ pub struct MessageSend {
     pub to_crate: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SendMethod {
     Tell,   // actor_ref.tell(message)
     Ask,    // actor_ref.ask(message)
@@ -312,6 +382,9 @@ impl ParsedSymbols {
             distributed_actors: Vec::new(),
             distributed_message_flows: Vec::new(),
             macro_expansions: Vec::new(),
+            traits: Vec::new(),
+            function_calls: Vec::new(),
+            macro_invocations: Vec::new(),
         }
     }
 
@@ -543,6 +616,8 @@ pub struct MacroContext {
     pub expansion_id: String,
     pub macro_type: String,
     pub expansion_site_line: usize,
+    pub name: String,
+    pub kind: String,
 }
 
 /// Represents a macro expansion detected in the source code
@@ -552,8 +627,10 @@ pub struct MacroExpansion {
     pub crate_name: String,
     pub file_path: String,
     pub line_range: std::ops::Range<usize>,  // Enhanced: line range vs single line
-    pub macro_type: String,                  // "paste", "proc_macro", "declarative"
+    pub macro_name: String,                  // The actual macro name (e.g., "paste", "println")
+    pub macro_type: String,                  // "paste", "proc_macro", "declarative", "builtin"
     pub expansion_pattern: String,
+    pub expanded_content: Option<String>,    // The content that would be expanded
     pub target_functions: Vec<String>,       // Resolved target functions
     pub containing_function: Option<String>, // Containing function ID
     pub expansion_context: MacroContext,     // Richer context
